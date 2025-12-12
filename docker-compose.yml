@@ -1,3 +1,5 @@
+version: "3.9"
+
 services:
   traefik:
     image: traefik:v3.5
@@ -16,11 +18,21 @@ services:
       - app-net
 
   web1:
+    container_name: web1
     build: ./frontend
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.web.rule=PathPrefix(`/`)"
+      - 'traefik.http.routers.web.rule=Host("localhost") && PathPrefix("/")'
       - "traefik.http.routers.web.entrypoints=web"
+      - "traefik.http.services.web.loadbalancer.server.port=80"
+    networks:
+      - app-net
+
+  web2:
+    container_name: web2
+    build: ./frontend
+    labels:
+      - "traefik.enable=true"
       - "traefik.http.services.web.loadbalancer.server.port=80"
     networks:
       - app-net
