@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Eventi</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <button id="backBtn" class="back-btn">← Natrag</button>
+            <h2 id="clubTitle"></h2>
+        </div>
+        <div id="eventCards" class="card-grid"></div>
+    </div>
+
+    <script>
+        const urlParams = new URLSearchParams(window.location.search);
+        const clubId = urlParams.get('club_id');
+        const clubName = urlParams.get('club_name');
+
+        document.getElementById('clubTitle').textContent = `${clubName}`;
+        document.getElementById('backBtn').onclick = () => window.history.back();
+
+        function loadEvents() {
+          fetch(`/api/clubs/${clubId}/events`)
+            .then(r => r.json())
+            .then(data => {
+              const eventCards = document.getElementById('eventCards');
+              eventCards.innerHTML = '';
+              if (!data.events || data.events.length === 0) {
+                eventCards.innerHTML = '<p style="grid-column: 1/-1; text-align: center; color: #9ca3af; font-size: 18px;">Nema dostupnih evenata.</p>';
+                return;
+              }
+              data.events.forEach(ev => {
+                const card = document.createElement('div');
+                card.className = 'card';
+                card.onclick = () => {
+                  window.location.href = `/tables.html?event_id=${ev.id}&event_name=${encodeURIComponent(ev.name)}`;
+                };
+
+                const title = document.createElement('div');
+                title.className = 'card-title';
+                title.textContent = ev.name;
+
+                const subtitle = document.createElement('div');
+                subtitle.className = 'card-subtitle';
+                subtitle.textContent = '📅 ' + (ev.date || 'Datum: nepoznat');
+
+                const text = document.createElement('div');
+                text.className = 'card-text';
+                text.textContent = ev.description || 'Opis eventa...';
+
+                card.appendChild(title);
+                card.appendChild(subtitle);
+                card.appendChild(text);
+                eventCards.appendChild(card);
+              });
+            });
+        }
+        loadEvents();
+    </script>
+</body>
+</html>

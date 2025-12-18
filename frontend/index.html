@@ -3,20 +3,49 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="X-UA-Compatible" content="ie=edge">
-    <title>Događaji & Rezervacije</title>
+    <title>Noćni klub – Odaberi klub</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <h1>Noćni klub - Događaji</h1>
-
-    <div id="events">
-    <!-- Mock data će se učitati ovdje -->
+    <div class="container">
+        <h1>🎵 Odaberi noćni klub</h1>
+        <div id="clubCards" class="card-grid"></div>
     </div>
 
-    <h2>Rezerviraj stol</h2>
-    <button onclick="reserveTable()">Rezerviraj stol 5</button>
+    <script>
+        function loadClubs() {
+          fetch('/api/clubs')
+            .then(r => r.json())
+            .then(data => {
+              const clubCards = document.getElementById('clubCards');
+              clubCards.innerHTML = '';
+              data.clubs.forEach(club => {
+                const card = document.createElement('div');
+                card.className = 'card';
+                card.onclick = () => {
+                  window.location.href = `/events.html?club_id=${club.id}&club_name=${encodeURIComponent(club.name)}`;
+                };
 
-    <script src="script.js"></script>
+                const title = document.createElement('div');
+                title.className = 'card-title';
+                title.textContent = club.name;
+
+                const subtitle = document.createElement('div');
+                subtitle.className = 'card-subtitle';
+                subtitle.textContent = '📍 ' + (club.location || 'Lokacija: nepoznata');
+
+                const text = document.createElement('div');
+                text.className = 'card-text';
+                text.textContent = club.description || 'Opis kluba...';
+
+                card.appendChild(title);
+                card.appendChild(subtitle);
+                card.appendChild(text);
+                clubCards.appendChild(card);
+              });
+            });
+        }
+        loadClubs();
+    </script>
 </body>
 </html>

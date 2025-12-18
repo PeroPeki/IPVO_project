@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stolovi</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <button id="backBtn" class="back-btn">← Natrag</button>
+            <h2 id="eventTitle"></h2>
+        </div>
+        <div id="tables" class="tables-grid"></div>
+    </div>
+
+    <script>
+        const urlParams = new URLSearchParams(window.location.search);
+        const eventId = urlParams.get('event_id');
+        const eventName = urlParams.get('event_name');
+
+        document.getElementById('eventTitle').textContent = eventName;
+        document.getElementById('backBtn').onclick = () => window.history.back();
+
+        function loadTables() {
+          fetch(`/api/events/${eventId}/tables`)
+            .then(r => r.json())
+            .then(data => {
+              const tablesDiv = document.getElementById('tables');
+              tablesDiv.innerHTML = '';
+              if (!data.tables || data.tables.length === 0) {
+                tablesDiv.innerHTML = '<p style="grid-column: 1/-1; text-align: center; color: #9ca3af; font-size: 18px;">Nema dostupnih stolova.</p>';
+                return;
+              }
+              data.tables.forEach(table => {
+                const card = document.createElement('div');
+                card.className = `table-card ${table.status}`;
+
+                const num = document.createElement('div');
+                num.className = 'table-number';
+                num.textContent = `🪑 ${table.number}`;
+
+                const status = document.createElement('div');
+                status.className = 'table-status';
+                status.textContent = table.status === 'free' ? '✅ Slobodan' : '❌ Rezerviran';
+
+                const btn = document.createElement('button');
+                if (table.status === 'free') {
+                  btn.textContent = '📝 Rezerviraj';
+                  btn.onclick = () => confirmReserve(table);
+                } else {
+                  btn.textContent = '🚫 Otkaži';
+                  btn.onclick = () => confirmCancel(table);
+                }
+
+                card.appendChild(num);
+                card.appendChild(status);
+                card.appendChild(btn);
+                tablesDiv.appendChild(card);
+              });
+            });
+        }
+
+        function confirmReserve(table) {
+          if (window.confirm(`Želite li rezervirati stol ${table.number}?`)) {
+            reserveTable(table.id);
+          }
+        }
+
+        function confirmCancel(table) {
+          if (window.confirm(`Želite li otkazati rezervaciju stola ${table.number}?`)) {
+            cancelTable(table.id);
+          }
+        }
+
+        function reserveTable(tableId) {
+          fetch(`/api/events/${eventId}/tables/${tableId}/reserve`, {
+            method: 'POST'
+          })
+            .then(r => r.json())
+            .then(() => loadTables());
+        }
+
+        function cancelTable(tableId) {
+          fetch(`/api/events/${eventId}/tables/${tableId}/cancel`, {
+            method: 'POST'
+          })
+            .then(r => r.json())
+            .then(() => loadTables());
+        }
+
+        loadTables();
+    </script>
+</body>
+</html>
