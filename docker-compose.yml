@@ -57,5 +57,19 @@ services:
     networks:
       - app-net
 
+  mongo:
+    image: mongo:7.0
+    container_name: mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_:/data/db
+    networks:
+      - app-net
+
 networks:
   app-net: {}
+
+volumes:
+  mongo_: {}
