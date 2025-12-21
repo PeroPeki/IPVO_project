@@ -64,7 +64,9 @@ services:
     ports:
       - "27017:27017"
     volumes:
-      - mongo_:/data/db
+     - mongo_:/data/db
+     - ./mongo-init:/docker-entrypoint-initdb.d:ro
+
     networks:
       - app-net
 
