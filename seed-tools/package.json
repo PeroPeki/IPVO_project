@@ -1,0 +1,12 @@
+{
+  "name": "club-reservation-seeder",
+  "version": "1.0.0",
+  "description": "Faker seeder za nightclub reservation sistem",
+  "scripts": {
+    "seed": "node seed.js"
+  },
+  "dependencies": {
+    "@faker-js/faker": "^8.4.1",
+    "mongodb": "^6.6.2"
+  }
+}

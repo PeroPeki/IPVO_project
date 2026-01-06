@@ -70,6 +70,14 @@ services:
     networks:
       - app-net
 
+  seed:
+    build:
+      context: ./seed-tools
+    depends_on:
+      - mongo
+    networks:
+      - app-net
+
 networks:
   app-net: {}
 
