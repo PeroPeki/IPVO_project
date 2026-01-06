@@ -9,7 +9,24 @@
 <body>
     <div class="container">
         <h1>🎵 Odaberi noćni klub</h1>
+
         <div id="clubCards" class="card-grid"></div>
+
+        <!-- Sekcija za dodavanje kluba -->
+        <div class="add-club-section">
+            
+
+            <div id="add-club-form" class="add-club-form hidden">
+                <h2>Dodaj klub</h2>
+                <div class="add-club-row">
+                    <input id="club-id" placeholder="ID (npr. club-a)">
+                    <input id="club-name" placeholder="Naziv kluba">
+                    <input id="club-location" placeholder="Lokacija">
+                    <input id="club-description" placeholder="Opis kluba">
+                    <button id="save-club">Spremi</button>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -41,10 +58,61 @@
                 card.appendChild(title);
                 card.appendChild(subtitle);
                 card.appendChild(text);
+
+                // gumb za brisanje kluba
+                const deleteBtn = document.createElement('button');
+                deleteBtn.textContent = 'Obriši';
+                deleteBtn.className = 'delete-club-btn';
+                deleteBtn.onclick = (e) => {
+                  e.stopPropagation();
+                  deleteClub(club.id);
+                };
+                card.appendChild(deleteBtn);
+
                 clubCards.appendChild(card);
               });
             });
         }
+
+        function addClub() {
+          const id = document.getElementById('club-id').value;
+          const name = document.getElementById('club-name').value;
+          const location = document.getElementById('club-location').value;
+          const description = document.getElementById('club-description').value;
+
+          fetch('/api/clubs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id, name, location, description })
+          }).then(() => {
+            document.getElementById('club-id').value = '';
+            document.getElementById('club-name').value = '';
+            document.getElementById('club-location').value = '';
+            document.getElementById('club-description').value = '';
+            loadClubs();
+          });
+        }
+
+        function deleteClub(id) {
+          fetch(`/api/clubs/${id}`, { method: 'DELETE' })
+            .then(() => loadClubs());
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+          const toggleBtn = document.getElementById('toggle-add-club');
+          const formDiv = document.getElementById('add-club-form');
+          const saveBtn = document.getElementById('save-club');
+
+          if (toggleBtn) {
+            toggleBtn.addEventListener('click', () => {
+              formDiv.classList.toggle('hidden');
+            });
+          }
+          if (saveBtn) {
+            saveBtn.addEventListener('click', addClub);
+          }
+        });
+
         loadClubs();
     </script>
 </body>

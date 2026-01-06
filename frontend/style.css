@@ -211,3 +211,48 @@ h2 {
         grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
     }
 }
+
+/* >>> NEW: Dodaj klub sekcija */
+.hidden {
+  display: none;
+}
+
+.add-club-section {
+  margin-top: 2rem;
+}
+
+#toggle-add-club {
+  padding: 0.5rem 1rem;
+  border-radius: 8px;
+  border: none;
+  background: #4f46e5;
+  color: white;
+  cursor: pointer;
+}
+
+.add-club-form {
+  margin-top: 1rem;
+}
+
+.add-club-row {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.add-club-row input {
+  padding: 0.4rem 0.6rem;
+  border-radius: 8px;
+  border: none;
+}
+
+.add-club-row button {
+  padding: 0.4rem 0.9rem;
+  border-radius: 8px;
+  border: none;
+  background: #10b981;
+  color: #f9fafb;
+  cursor: pointer;
+  font-weight: 500;
+}
+/* <<< NEW */
