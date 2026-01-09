@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kupi kartu</title>
+    <link rel="stylesheet" href="style.css?v=1.0">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <button id="backBtn" class="back-btn">← Natrag</button>
+            <h2>Kupnja karte</h2>
+        </div>
+
+        <div id="buySection" class="ticket-card">
+            <div id="eventDetails"></div>
+            <button id="buyBtn" class="buy-btn">💳 Kupi kartu</button>
+            <p id="message" class="message"></p>
+        </div>
+
+        <div id="bookingInfo" class="booking-info hidden">
+            <h3>✅ Karta uspješno kupljena!</h3>
+            <button id="viewTablesBtn" class="btn-primary">Pogledaj stolove</button>
+        </div>
+    </div>
+
+    <script>
+        console.log("buy-ticket.html UČITAN");
+
+        function checkUser() {
+            const username = localStorage.getItem('username');
+            console.log("Username:", username);
+            if (!username) {
+                window.location.href = '/index.html';
+                return false;
+            }
+            return true;
+        }
+
+        const urlParams = new URLSearchParams(window.location.search);
+        const eventId = urlParams.get('event_id');
+        const eventName = urlParams.get('event_name');
+        const clubName = urlParams.get('club_name');
+        const username = localStorage.getItem('username');
+
+        console.log("Event ID:", eventId);
+        console.log("Event Name:", eventName);
+        console.log("Username:", username);
+
+        function loadEventDetails() {
+            const eventDetails = document.getElementById('eventDetails');
+            eventDetails.innerHTML = `
+                <p><strong>Klub:</strong> ${clubName}</p>
+                <p><strong>Event:</strong> ${eventName}</p>
+                <p><strong>Korisnik:</strong> ${username}</p>
+                <hr>
+                <p style="color: #666; font-size: 14px;">Klikom na "Kupi kartu" dobivate pristup svim stolovima za ovaj event.</p>
+            `;
+        }
+
+        async function checkAlreadyHasTicket() {
+            const url = `/api/users/${username}/has-ticket/${eventId}`;
+            console.log("Proveravamo da li korisnik već ima kartu:", url);
+            
+            try {
+                const res = await fetch(url);
+                const data = await res.json();
+                console.log("Rezultat provjere:", data);
+                
+                if (data.hasTicket) {
+                    console.log("Korisnik već ima kartu!");
+                    document.getElementById('buySection').style.display = 'none';
+                    document.getElementById('bookingInfo').classList.remove('hidden');
+                    
+                    document.getElementById('viewTablesBtn').addEventListener('click', () => {
+                        window.location.href = `/tables.html?event_id=${eventId}&event_name=${encodeURIComponent(eventName)}`;
+                    });
+                    return true;
+                }
+                return false;
+            } catch (err) {
+                console.error('Greška pri provjeri karte:', err);
+                return false;
+            }
+        }
+
+        function buyTicket() {
+            console.log("Kliknut gumb 'Kupi kartu'");
+            const buyBtn = document.getElementById('buyBtn');
+            buyBtn.disabled = true;
+            buyBtn.textContent = 'Obrađujem...';
+
+            const url = `/api/users/${username}/buy-ticket/${eventId}`;
+            console.log("POST na:", url);
+
+            fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({})
+            })
+            .then(r => {
+                console.log("Response status:", r.status);
+                return r.json();
+            })
+            .then(data => {
+                console.log("Response JSON:", data);
+                if (data.success) {
+                    console.log("Kupnja uspješna!");
+                    document.getElementById('buySection').style.display = 'none';
+                    document.getElementById('bookingInfo').classList.remove('hidden');
+                    
+                    document.getElementById('viewTablesBtn').addEventListener('click', () => {
+                        window.location.href = `/tables.html?event_id=${eventId}&event_name=${encodeURIComponent(eventName)}`;
+                    });
+                } else {
+                    console.error("Greška:", data.message);
+                    document.getElementById('message').textContent = '❌ Greška: ' + (data.message || 'Neuspješna kupnja');
+                    buyBtn.disabled = false;
+                    buyBtn.textContent = 'Kupi kartu';
+                }
+            })
+            .catch(err => {
+                console.error('Catch error:', err);
+                document.getElementById('message').textContent = '❌ Greška pri kupnji karte: ' + err.message;
+                buyBtn.disabled = false;
+                buyBtn.textContent = 'Kupi kartu';
+            });
+        }
+
+        document.getElementById('backBtn').onclick = () => window.history.back();
+        document.getElementById('buyBtn').addEventListener('click', buyTicket);
+
+        async function init() {
+            if (checkUser()) {
+                // Provjeri prvo da li već ima kartu (ako se vrati na stranicu)
+                const hasTicket = await checkAlreadyHasTicket();
+                
+                // Ako nema, prikaži formu za kupnju
+                if (!hasTicket) {
+                    loadEventDetails();
+                }
+            }
+        }
+
+        init();
+    </script>
+</body>
+</html>

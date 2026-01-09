@@ -3,117 +3,51 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Noćni klub – Odaberi klub</title>
+    <title>Noćni klub - Login</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <div class="container">
-        <h1>🎵 Odaberi noćni klub</h1>
-
-        <div id="clubCards" class="card-grid"></div>
-
-        <!-- Sekcija za dodavanje kluba -->
-        <div class="add-club-section">
+    <div class="container login-container">
+        <div class="login-card">
+            <h1>🎵 Noćni klub</h1>
+            <p>Unesite korisničko ime</p>
             
-
-            <div id="add-club-form" class="add-club-form hidden">
-                <h2>Dodaj klub</h2>
-                <div class="add-club-row">
-                    <input id="club-id" placeholder="ID (npr. club-a)">
-                    <input id="club-name" placeholder="Naziv kluba">
-                    <input id="club-location" placeholder="Lokacija">
-                    <input id="club-description" placeholder="Opis kluba">
-                    <button id="save-club">Spremi</button>
-                </div>
+            <div class="login-form">
+                <input id="username" type="text" placeholder="Korisničko ime" />
+                <button id="loginBtn">Login</button>
             </div>
+            
         </div>
     </div>
 
     <script>
-        function loadClubs() {
-          fetch('/api/clubs')
-            .then(r => r.json())
-            .then(data => {
-              const clubCards = document.getElementById('clubCards');
-              clubCards.innerHTML = '';
-              data.clubs.forEach(club => {
-                const card = document.createElement('div');
-                card.className = 'card';
-                card.onclick = () => {
-                  window.location.href = `/events.html?club_id=${club.id}&club_name=${encodeURIComponent(club.name)}`;
-                };
-
-                const title = document.createElement('div');
-                title.className = 'card-title';
-                title.textContent = club.name;
-
-                const subtitle = document.createElement('div');
-                subtitle.className = 'card-subtitle';
-                subtitle.textContent = '📍 ' + (club.location || 'Lokacija: nepoznata');
-
-                const text = document.createElement('div');
-                text.className = 'card-text';
-                text.textContent = club.description || 'Opis kluba...';
-
-                card.appendChild(title);
-                card.appendChild(subtitle);
-                card.appendChild(text);
-
-                // gumb za brisanje kluba
-                const deleteBtn = document.createElement('button');
-                deleteBtn.textContent = 'Obriši';
-                deleteBtn.className = 'delete-club-btn';
-                deleteBtn.onclick = (e) => {
-                  e.stopPropagation();
-                  deleteClub(club.id);
-                };
-                card.appendChild(deleteBtn);
-
-                clubCards.appendChild(card);
-              });
+        function login() {
+            const username = document.getElementById('username').value.trim();
+            
+            if (!username) {
+                alert('Unesite korisničko ime!');
+                return;
+            }
+            
+            localStorage.setItem('username', username);
+            
+            fetch('/api/users', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username })
+            }).then(() => {
+                window.location.href = '/clubs.html';
+            }).catch(err => {
+                console.error('Greška:', err);
+                alert('Greška pri logiranju!');
             });
         }
-
-        function addClub() {
-          const id = document.getElementById('club-id').value;
-          const name = document.getElementById('club-name').value;
-          const location = document.getElementById('club-location').value;
-          const description = document.getElementById('club-description').value;
-
-          fetch('/api/clubs', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id, name, location, description })
-          }).then(() => {
-            document.getElementById('club-id').value = '';
-            document.getElementById('club-name').value = '';
-            document.getElementById('club-location').value = '';
-            document.getElementById('club-description').value = '';
-            loadClubs();
-          });
-        }
-
-        function deleteClub(id) {
-          fetch(`/api/clubs/${id}`, { method: 'DELETE' })
-            .then(() => loadClubs());
-        }
-
-        document.addEventListener('DOMContentLoaded', () => {
-          const toggleBtn = document.getElementById('toggle-add-club');
-          const formDiv = document.getElementById('add-club-form');
-          const saveBtn = document.getElementById('save-club');
-
-          if (toggleBtn) {
-            toggleBtn.addEventListener('click', () => {
-              formDiv.classList.toggle('hidden');
-            });
-          }
-          if (saveBtn) {
-            saveBtn.addEventListener('click', addClub);
-          }
+        
+        document.getElementById('username').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') login();
         });
-
-        loadClubs();
+        
+        document.getElementById('loginBtn').addEventListener('click', login);
     </script>
 </body>
 </html>

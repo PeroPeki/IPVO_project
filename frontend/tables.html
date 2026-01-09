@@ -13,84 +13,144 @@
             <h2 id="eventTitle"></h2>
         </div>
         <div id="tables" class="tables-grid"></div>
+        <div id="noAccess" class="no-access hidden">
+            <p>❌ Trebate kupiti kartu za ovaj event kako biste vidjeli stolove!</p>
+            <button id="buyBtn" class="btn-primary">Kupi kartu</button>
+        </div>
     </div>
 
     <script>
+        console.log("tables.html UČITAN");
+
+        function checkUser() {
+            const username = localStorage.getItem('username');
+            console.log("Username:", username);
+            if (!username) {
+                window.location.href = '/index.html';
+                return false;
+            }
+            return true;
+        }
+
         const urlParams = new URLSearchParams(window.location.search);
         const eventId = urlParams.get('event_id');
         const eventName = urlParams.get('event_name');
+        const username = localStorage.getItem('username');
 
-        document.getElementById('eventTitle').textContent = eventName;
+        console.log("Event ID:", eventId);
+        console.log("Username:", username);
+
+        document.getElementById('eventTitle').textContent = eventName || 'Stolovi';
         document.getElementById('backBtn').onclick = () => window.history.back();
 
-        function loadTables() {
-          fetch(`/api/events/${eventId}/tables`)
-            .then(r => r.json())
-            .then(data => {
-              const tablesDiv = document.getElementById('tables');
-              tablesDiv.innerHTML = '';
-              if (!data.tables || data.tables.length === 0) {
-                tablesDiv.innerHTML = '<p style="grid-column: 1/-1; text-align: center; color: #9ca3af; font-size: 18px;">Nema dostupnih stolova.</p>';
+        function checkIfHasTicket() {
+            const url = `/api/users/${username}/has-ticket/${eventId}`;
+            console.log("GET na:", url);
+            
+            return fetch(url)
+                .then(r => {
+                    console.log("Response status:", r.status);
+                    return r.json();
+                })
+                .then(data => {
+                    console.log("Has ticket response:", data);
+                    return data.hasTicket || false;
+                })
+                .catch(err => {
+                    console.error('Greška pri check-u:', err);
+                    return false;
+                });
+        }
+
+        async function loadTables() {
+            console.log("Počinjem provjeru karte...");
+            const hasTicket = await checkIfHasTicket();
+            console.log("Has ticket?", hasTicket);
+            
+            if (!hasTicket) {
+                console.log("Korisnik NEMA kartu - pokazujem no-access");
+                document.getElementById('tables').style.display = 'none';
+                document.getElementById('noAccess').classList.remove('hidden');
+                
+                document.getElementById('buyBtn').onclick = () => {
+                    window.location.href = `/buy-ticket.html?event_id=${eventId}&event_name=${encodeURIComponent(eventName)}`;
+                };
                 return;
-              }
-              data.tables.forEach(table => {
-                const card = document.createElement('div');
-                card.className = `table-card ${table.status}`;
+            }
 
-                const num = document.createElement('div');
-                num.className = 'table-number';
-                num.textContent = `🪑 ${table.number}`;
+            console.log("Korisnik IMA kartu - učitavam stolove");
+            const url = `/api/events/${eventId}/tables`;
+            console.log("GET na:", url);
 
-                const status = document.createElement('div');
-                status.className = 'table-status';
-                status.textContent = table.status === 'free' ? '✅ Slobodan' : '❌ Rezerviran';
+            fetch(url)
+                .then(r => r.json())
+                .then(data => {
+                    console.log("Tables response:", data);
+                    const tablesDiv = document.getElementById('tables');
+                    tablesDiv.innerHTML = '';
+                    if (!data.tables || data.tables.length === 0) {
+                        tablesDiv.innerHTML = '<p style="grid-column: 1/-1; text-align: center;">Nema dostupnih stolova.</p>';
+                        return;
+                    }
+                    data.tables.forEach(table => {
+                        const card = document.createElement('div');
+                        card.className = `table-card ${table.status}`;
 
-                const btn = document.createElement('button');
-                if (table.status === 'free') {
-                  btn.textContent = '📝 Rezerviraj';
-                  btn.onclick = () => confirmReserve(table);
-                } else {
-                  btn.textContent = '🚫 Otkaži';
-                  btn.onclick = () => confirmCancel(table);
-                }
+                        const num = document.createElement('div');
+                        num.className = 'table-number';
+                        num.textContent = `🪑 ${table.number}`;
 
-                card.appendChild(num);
-                card.appendChild(status);
-                card.appendChild(btn);
-                tablesDiv.appendChild(card);
-              });
-            });
+                        const status = document.createElement('div');
+                        status.className = 'table-status';
+                        status.textContent = table.status === 'free' ? '✅ Slobodan' : '❌ Rezerviran';
+
+                        const btn = document.createElement('button');
+                        if (table.status === 'free') {
+                            btn.textContent = '📝 Rezerviraj';
+                            btn.onclick = () => confirmReserve(table);
+                        } else {
+                            btn.textContent = '🚫 Otkaži';
+                            btn.onclick = () => confirmCancel(table);
+                        }
+
+                        card.appendChild(num);
+                        card.appendChild(status);
+                        card.appendChild(btn);
+                        tablesDiv.appendChild(card);
+                    });
+                })
+                .catch(err => {
+                    console.error('Greška pri učitavanju stolova:', err);
+                });
         }
 
         function confirmReserve(table) {
-          if (window.confirm(`Želite li rezervirati stol ${table.number}?`)) {
-            reserveTable(table.id);
-          }
+            if (window.confirm(`Želite li rezervirati stol ${table.number}?`)) {
+                reserveTable(table.id);
+            }
         }
 
         function confirmCancel(table) {
-          if (window.confirm(`Želite li otkazati rezervaciju stola ${table.number}?`)) {
-            cancelTable(table.id);
-          }
+            if (window.confirm(`Želite li otkazati rezervaciju stola ${table.number}?`)) {
+                cancelTable(table.id);
+            }
         }
 
         function reserveTable(tableId) {
-          fetch(`/api/events/${eventId}/tables/${tableId}/reserve`, {
-            method: 'POST'
-          })
-            .then(r => r.json())
-            .then(() => loadTables());
+            fetch(`/api/events/${eventId}/tables/${tableId}/reserve`, {
+                method: 'POST'
+            }).then(r => r.json()).then(() => loadTables());
         }
 
         function cancelTable(tableId) {
-          fetch(`/api/events/${eventId}/tables/${tableId}/cancel`, {
-            method: 'POST'
-          })
-            .then(r => r.json())
-            .then(() => loadTables());
+            fetch(`/api/events/${eventId}/tables/${tableId}/cancel`, {
+                method: 'POST'
+            }).then(r => r.json()).then(() => loadTables());
         }
 
-        loadTables();
+        if (checkUser()) {
+            loadTables();
+        }
     </script>
 </body>
 </html>

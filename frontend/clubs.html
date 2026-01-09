@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Noćni klub – Odaberi klub</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header-top">
+            <h1>🎵 Odaberi noćni klub</h1>
+            <div class="user-info">
+                Korisnik: <strong id="userDisplay"></strong>
+                <button id="logoutBtn" class="logout-btn">Odjava</button>
+            </div>
+        </div>
+
+        <div id="clubCards" class="card-grid"></div>
+    </div>
+
+    <script>
+        function checkUser() {
+            const username = localStorage.getItem('username');
+            if (!username) {
+                window.location.href = '/index.html';
+                return;
+            }
+            document.getElementById('userDisplay').textContent = username;
+        }
+
+        function loadClubs() {
+            fetch('/api/clubs')
+                .then(r => r.json())
+                .then(data => {
+                    const clubCards = document.getElementById('clubCards');
+                    clubCards.innerHTML = '';
+                    data.clubs.forEach(club => {
+                        const card = document.createElement('div');
+                        card.className = 'card';
+                        card.onclick = () => {
+                            window.location.href = `/events.html?club_id=${club.id}&club_name=${encodeURIComponent(club.name)}`;
+                        };
+
+                        const title = document.createElement('div');
+                        title.className = 'card-title';
+                        title.textContent = club.name;
+
+                        const subtitle = document.createElement('div');
+                        subtitle.className = 'card-subtitle';
+                        subtitle.textContent = '📍 ' + (club.location || 'Lokacija: nepoznata');
+
+                        const text = document.createElement('div');
+                        text.className = 'card-text';
+                        text.textContent = club.description || 'Opis kluba...';
+
+                        card.appendChild(title);
+                        card.appendChild(subtitle);
+                        card.appendChild(text);
+                        clubCards.appendChild(card);
+                    });
+                });
+        }
+
+        document.getElementById('logoutBtn').addEventListener('click', () => {
+            localStorage.removeItem('username');
+            window.location.href = '/index.html';
+        });
+
+        checkUser();
+        loadClubs();
+    </script>
+</body>
+</html>
