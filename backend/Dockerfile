@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.9-slim
 
 WORKDIR /app
 
@@ -9,5 +9,7 @@ COPY . .
 
 # Flask mora slušati na 0.0.0.0
 ENV FLASK_APP=app.py
+ENV PYTHONUNBUFFERED=1
 
-CMD ["python", "app.py"]
+# -w 1 znači jedan worker (proces) jer koristimo gevent koji je asinkroni
+CMD ["gunicorn", "--worker-class", "gevent", "-w", "1", "--bind", "0.0.0.0:5000", "app:app"]

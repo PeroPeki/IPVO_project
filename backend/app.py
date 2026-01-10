@@ -1,14 +1,28 @@
+from gevent import monkey
+monkey.patch_all()
+
 from flask import Flask, jsonify, request
+from flask_socketio import SocketIO, emit, join_room, leave_room
 from pymongo import MongoClient
 from datetime import datetime
 from bson import ObjectId
+import pika
+import json
+import threading
+import time
 
 app = Flask(__name__)
+app.config['SECRET_KEY'] = 'secret!'
 
-# Mongo connection
-client = MongoClient("mongodb://mongo:27017")
+# Inicijalizacija SocketIO s podrškom za CORS
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
+
+# Mongo Connection
+# Spajamo se na 'mongo' servis definiran u docker-compose
+client = MongoClient("mongodb://mongo:27017", connect = False)
 db = client["mydb"]
 
+# Kolekcije
 clubs_col = db["clubs"]
 events_col = db["events"]
 tables_col = db["tables"]
@@ -16,107 +30,204 @@ reservations_col = db["reservations"]
 users_col = db["users"]
 tickets_col = db["tickets"]
 
-# ========== HELPER FUNKCIJE ==========
+# ==========================================
+# RABBITMQ FUNKCIONALNOST (Producer & Consumer)
+# ==========================================
 
-def serialize_doc(doc):
-    """Konvertiraj MongoDB document u JSON"""
-    if doc is None:
-        return None
-    if isinstance(doc, list):
-        return [serialize_doc(d) for d in doc]
-    if isinstance(doc, dict):
-        doc.pop('_id', None)  # Uklanja _id (ObjectId)
-        return doc
-    return doc
+def get_rabbitmq_connection():
+    """Pomoćna funkcija za spajanje na RabbitMQ s retry logikom."""
+    retries = 10
+    while retries > 0:
+        try:
+            credentials = pika.PlainCredentials('guest', 'guest')
+            parameters = pika.ConnectionParameters(
+                host='rabbitmq',
+                port=5672,
+                credentials=credentials,
+                connection_attempts=5,
+                retry_delay=2
+            )
+            return pika.BlockingConnection(parameters)
+        except pika.exceptions.AMQPConnectionError:
+            print(f"RabbitMQ nije spreman, čekam... ({retries} preostalo)")
+            retries -= 1
+            time.sleep(3)
+    raise Exception("Ne mogu se spojiti na RabbitMQ")
 
-# ========== CLUBS ENDPOINTS ==========
+def publish_to_rabbitmq(message):
+    """
+    PRODUCER: Šalje poruku u RabbitMQ exchange 'table_events'.
+    Poziva se iz API ruta (reserve/cancel).
+    """
+    connection = None
+    try:
+        connection = get_rabbitmq_connection()
+        channel = connection.channel()
+        
+        # Fanout exchange šalje poruku svim queuevima koji su bindani na njega
+        channel.exchange_declare(
+            exchange='table_events',
+            exchange_type='fanout',
+            durable=True
+        )
+        
+        body = json.dumps(message)
+        channel.basic_publish(
+            exchange='table_events',
+            routing_key='',
+            body=body
+        )
+        
+        print(f" [x] Poslano u RabbitMQ: {message}")
+        
+    except Exception as e:
+        print(f" [!] Greška pri slanju u RabbitMQ: {e}")
+    finally:
+        if connection:
+            connection.close()
 
-@app.get("/api/clubs")
+def listen_to_rabbitmq():
+    """
+    CONSUMER: Pozadinska dretva koja sluša RabbitMQ.
+    Kada primi poruku, prosljeđuje je klijentima preko Socket.IO.
+    """
+    # Malo pričekamo da se RabbitMQ servis sigurno podigne pri startu kontejnera
+    time.sleep(5)
+    
+    try:
+        connection = get_rabbitmq_connection()
+        channel = connection.channel()
+        
+        channel.exchange_declare(
+            exchange='table_events',
+            exchange_type='fanout',
+            durable=True
+        )
+        
+        # Kreiramo privremeni, ekskluzivni queue za ovu instancu backenda
+        result = channel.queue_declare(queue='', exclusive=True)
+        queue_name = result.method.queue
+        
+        channel.queue_bind(exchange='table_events', queue=queue_name)
+        
+        print(f" [*] Backend Consumer sluša na redu: {queue_name}")
+
+        def callback(ch, method, properties, body):
+            try:
+                data = json.loads(body)
+                print(f" [x] RabbitMQ -> SocketIO: {data}")
+                
+                # OVDJE se događa 'Real-Time' magija:
+                # Šaljemo podatak svim spojenim klijentima
+                socketio.emit('table_updated', data)
+                
+            except Exception as e:
+                print(f"Greška u consumer callbacku: {e}")
+
+        channel.basic_consume(
+            queue=queue_name,
+            on_message_callback=callback,
+            auto_ack=True
+        )
+        
+        channel.start_consuming()
+        
+    except Exception as e:
+        print(f" [!] RabbitMQ Consumer Thread umro: {e}")
+
+# Pokreni RabbitMQ Consumera u pozadini
+# Daemon=True znači da će se ugasiti kad se ugasi glavna aplikacija
+rabbitmq_thread = threading.Thread(target=listen_to_rabbitmq, daemon=True)
+rabbitmq_thread.start()
+
+# ==========================================
+# WEBSOCKET HANDLERI
+# ==========================================
+
+@socketio.on('connect')
+def handle_connect():
+    print(f"Client connected: {request.sid}")
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    print(f"Client disconnected: {request.sid}")
+
+# ==========================================
+# REST API RUTE
+# ==========================================
+
+@app.route('/api/clubs', methods=['GET'])
 def get_clubs():
     clubs = list(clubs_col.find({}, {"_id": 0}))
     return jsonify({"clubs": clubs})
 
-
-@app.post("/api/clubs")
+@app.route('/api/clubs', methods=['POST'])
 def add_club():
     data = request.get_json()
-    required = ["id", "name", "location", "description"]
-    if not data or any(k not in data for k in required):
-        return jsonify({"success": False, "message": "Nedostaju polja"}), 400
+    # Jednostavna validacija
+    if not data or "id" not in data:
+        return jsonify({"success": False, "message": "Fali ID"}), 400
+        
+    clubs_col.insert_one(data)
+    # Uklanjamo _id za response
+    if "_id" in data: del data["_id"]
+    return jsonify({"success": True, "club": data}), 201
 
-    if not data["id"].strip():
-        return jsonify({"success": False, "message": "ID je obavezan"}), 400
-
-    club = {
-        "id": data["id"],
-        "name": data["name"],
-        "location": data["location"],
-        "description": data["description"],
-    }
-
-    clubs_col.insert_one(club)
-    return jsonify({"success": True, "club": club}), 201
-
-
-@app.delete("/api/clubs/<club_id>")
-def delete_club(club_id):
-    result = clubs_col.delete_one({"id": club_id})
-
-    if result.deleted_count == 0:
-        return jsonify({"success": False, "message": "Klub ne postoji"}), 404
-
-    events_col.delete_many({"club_id": club_id})
-    tables_col.delete_many({"club_id": club_id})
-    reservations_col.delete_many({"club_id": club_id})
-
-    return jsonify({"success": True}), 200
-
-# ========== EVENTS ENDPOINTS ==========
-
-@app.get("/api/clubs/<club_id>/events")
-def get_events_for_club(club_id):
+@app.route('/api/clubs/<club_id>/events', methods=['GET'])
+def get_events(club_id):
     events = list(events_col.find({"club_id": club_id}, {"_id": 0}))
     return jsonify({"events": events})
 
-# ========== TABLES ENDPOINTS ==========
-
-@app.get("/api/events/<event_id>/tables")
-def get_tables_for_event(event_id):
+@app.route('/api/events/<event_id>/tables', methods=['GET'])
+def get_tables(event_id):
     tables = list(tables_col.find({"event_id": event_id}, {"_id": 0}))
     return jsonify({"tables": tables})
 
-
-@app.post("/api/events/<event_id>/tables/<table_id>/reserve")
+@app.route('/api/events/<event_id>/tables/<table_id>/reserve', methods=['POST'])
 def reserve_table(event_id, table_id):
-    table = tables_col.find_one({"event_id": event_id, "id": table_id}, {"_id": 0})
+    """
+    Rezervira stol i šalje notifikaciju kroz RabbitMQ.
+    """
+    # 1. Provjeri stol
+    table = tables_col.find_one({"event_id": event_id, "id": table_id})
     if not table:
         return jsonify({"success": False, "message": "Stol ne postoji"}), 404
-
+        
     if table.get("status") == "reserved":
-        return jsonify({"success": False, "message": "Stol je već zauzet"}), 409
+        return jsonify({"success": False, "message": "Već rezervirano"}), 409
 
+    # 2. Ažuriraj u bazi
     tables_col.update_one(
         {"event_id": event_id, "id": table_id},
         {"$set": {"status": "reserved"}}
     )
-
+    
     reservations_col.insert_one({
         "event_id": event_id,
         "table_id": table_id,
         "status": "booked",
-        "created_at": datetime.utcnow().isoformat() + "Z"
+        "timestamp": datetime.utcnow().isoformat()
     })
 
-    table["status"] = "reserved"
-    return jsonify({"success": True, "table": table}), 201
+    # 3. Pošalji u RabbitMQ (Consumer će odraditi socket emit)
+    publish_to_rabbitmq({
+        "type": "RESERVED",
+        "event_id": event_id,
+        "table_id": table_id,
+        "status": "reserved"
+    })
 
+    return jsonify({"success": True, "message": "Rezervirano"}), 200
 
-@app.post("/api/events/<event_id>/tables/<table_id>/cancel")
+@app.route('/api/events/<event_id>/tables/<table_id>/cancel', methods=['POST'])
 def cancel_table(event_id, table_id):
-    table = tables_col.find_one({"event_id": event_id, "id": table_id}, {"_id": 0})
+    """
+    Otkaži rezervaciju i šalje notifikaciju kroz RabbitMQ.
+    """
+    table = tables_col.find_one({"event_id": event_id, "id": table_id})
     if not table:
         return jsonify({"success": False, "message": "Stol ne postoji"}), 404
-
+        
     if table.get("status") == "free":
         return jsonify({"success": False, "message": "Stol je već slobodan"}), 409
 
@@ -124,114 +235,46 @@ def cancel_table(event_id, table_id):
         {"event_id": event_id, "id": table_id},
         {"$set": {"status": "free"}}
     )
+    
+    # Pošalji u RabbitMQ
+    publish_to_rabbitmq({
+        "type": "CANCELED",
+        "event_id": event_id,
+        "table_id": table_id,
+        "status": "free"
+    })
 
-    reservations_col.update_one(
-        {"event_id": event_id, "table_id": table_id, "status": "booked"},
-        {"$set": {"status": "canceled"}}
-    )
+    return jsonify({"success": True, "message": "Otkazano"}), 200
 
-    table["status"] = "free"
-    return jsonify({"success": True, "table": table}), 200
-
-# ========== USERS ENDPOINTS ==========
-
-@app.post("/api/users")
+# Korisnici i ulaznice (User management)
+@app.route('/api/users', methods=['POST'])
 def create_user():
     data = request.get_json()
-    username = data.get("username", "").strip()
-    
-    if not username:
-        return jsonify({"success": False, "message": "Username je obavezan"}), 400
-    
-    # Provjeri da li korisnik već postoji
-    existing = users_col.find_one({"username": username})
-    if existing:
-        return jsonify({"success": True, "message": "Korisnik već postoji"}), 200
-    
-    # Kreiraj novog korisnika
-    user = {
-        "username": username,
-        "created_at": datetime.utcnow().isoformat() + "Z"
-    }
-    
-    users_col.insert_one(user)
-    user.pop('_id', None)  # Uklanja ObjectId prije returnanja
-    return jsonify({"success": True, "user": user}), 201
+    username = data.get("username")
+    if not users_col.find_one({"username": username}):
+        users_col.insert_one({"username": username})
+    return jsonify({"success": True, "user": {"username": username}}), 201
 
-# ========== TICKET ENDPOINTS ==========
-
-@app.post("/api/users/<username>/buy-ticket/<event_id>")
+@app.route('/api/users/<username>/buy-ticket/<event_id>', methods=['POST'])
 def buy_ticket(username, event_id):
-    print(f"DEBUG: buy_ticket({username}, {event_id})")
-    
-    try:
-        # Provjeri da li korisnik postoji
-        user = users_col.find_one({"username": username})
-        if not user:
-            print(f"DEBUG: Korisnik {username} ne postoji")
-            return jsonify({"success": False, "message": "Korisnik ne postoji"}), 404
+    if tickets_col.find_one({"username": username, "event_id": event_id}):
+        return jsonify({"success": False, "message": "Već imate kartu"}), 409
         
-        # Provjeri da li event postoji
-        event = events_col.find_one({"id": event_id})
-        if not event:
-            print(f"DEBUG: Event {event_id} ne postoji")
-            return jsonify({"success": False, "message": "Event ne postoji"}), 404
-        
-        # Provjeri da li već ima kartu za ovaj event
-        existing_ticket = tickets_col.find_one({
-            "username": username,
-            "event_id": event_id
-        })
-        if existing_ticket:
-            print(f"DEBUG: {username} već ima kartu za {event_id}")
-            return jsonify({"success": False, "message": "Već ste kupili kartu za ovaj event"}), 409
-        
-        # Kreiraj novu kartu
-        ticket = {
-            "id": f"ticket-{username}-{event_id}",
-            "username": username,
-            "event_id": event_id,
-            "bought_at": datetime.utcnow().isoformat() + "Z"
-        }
-        
-        print(f"DEBUG: Kreiram kartu: {ticket}")
-        tickets_col.insert_one(ticket)
-        
-        # Uklanja _id prije slanja
-        ticket.pop('_id', None)
-        
-        print(f"DEBUG: Karta uspješno kupljena")
-        return jsonify({"success": True, "ticket": ticket}), 201
-    
-    except Exception as e:
-        print(f"ERROR u buy_ticket: {str(e)}")
-        return jsonify({"success": False, "message": f"Greška: {str(e)}"}), 500
+    tickets_col.insert_one({
+        "username": username,
+        "event_id": event_id,
+        "bought_at": datetime.utcnow().isoformat()
+    })
+    return jsonify({"success": True}), 201
 
-
-@app.get("/api/users/<username>/has-ticket/<event_id>")
+@app.route('/api/users/<username>/has-ticket/<event_id>', methods=['GET'])
 def has_ticket(username, event_id):
-    print(f"DEBUG: has_ticket({username}, {event_id})")
-    
-    try:
-        ticket = tickets_col.find_one({
-            "username": username,
-            "event_id": event_id
-        }, {"_id": 0})
-        
-        has_it = ticket is not None
-        print(f"DEBUG: has_ticket result = {has_it}")
-        return jsonify({"hasTicket": has_it}), 200
-    
-    except Exception as e:
-        print(f"ERROR u has_ticket: {str(e)}")
-        return jsonify({"hasTicket": False}), 200
+    ticket = tickets_col.find_one({"username": username, "event_id": event_id})
+    return jsonify({"hasTicket": ticket is not None}), 200
 
-
-@app.get("/api/users/<username>/tickets")
-def get_user_tickets(username):
-    tickets = list(tickets_col.find({"username": username}, {"_id": 0}))
-    return jsonify({"tickets": tickets}), 200
-
+# ==========================================
+# MAIN ENTRY POINT
+# ==========================================
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    socketio.run(app, host="0.0.0.0", port=5000, debug=True) 

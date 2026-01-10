@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html>
+<html lang="hr">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -9,22 +9,79 @@
 <body>
     <div class="container">
         <div class="header">
-            <button id="backBtn" class="back-btn">← Natrag</button>
+            <button id="backBtn" class="back-btn">Natrag</button>
             <h2 id="eventTitle"></h2>
+            <!-- Indikator statusa veze -->
+            <div style="font-size: 14px; margin-left: 10px;">
+                Status: <span id="connStatus" style="color: gray;">Spajanje...</span>
+            </div>
         </div>
-        <div id="tables" class="tables-grid"></div>
+        
+        <div id="loading" style="text-align: center; margin-top: 20px;">Učitavanje...</div>
+        
+        <div id="tables" class="tables-grid" style="display: none;"></div>
+        
         <div id="noAccess" class="no-access hidden">
-            <p>❌ Trebate kupiti kartu za ovaj event kako biste vidjeli stolove!</p>
+            <p>Trebate kupiti kartu za ovaj event kako biste vidjeli stolove!</p>
             <button id="buyBtn" class="btn-primary">Kupi kartu</button>
         </div>
     </div>
 
+    <!-- Ucitavanje Socket.IO biblioteke -->
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+
     <script>
-        console.log("tables.html UČITAN");
+        console.log("tables.html UCITAN");
+
+        const urlParams = new URLSearchParams(window.location.search);
+        const eventId = urlParams.get('event_id');
+        const eventName = urlParams.get('event_name');
+        const username = localStorage.getItem('username');
+
+        // Globalna varijabla da pamtimo ima li korisnik kartu
+        // Ovo sprječava da API bombardiramo provjerama kod svakog WebSocket update-a
+        let userHasTicket = false;
+
+        // UI Setup
+        document.getElementById('eventTitle').textContent = eventName || 'Stolovi';
+        document.getElementById('backBtn').onclick = () => window.history.back();
+
+        // ========== WEBSOCKET LOGIKA ==========
+        
+        // Spajanje na backend (automatski prepoznaje host)
+        const socket = io();
+        const statusElem = document.getElementById('connStatus');
+
+        socket.on('connect', () => {
+            console.log("WebSocket spojen! ID:", socket.id);
+            statusElem.textContent = "Online";
+            statusElem.style.color = "green";
+            
+            // Pridruživanje sobi za ovaj event (opcionalno, ako backend podržava sobe)
+            socket.emit('join_event', { event_id: eventId });
+        });
+
+        socket.on('disconnect', () => {
+            console.log("WebSocket odspojen.");
+            statusElem.textContent = "Offline";
+            statusElem.style.color = "red";
+        });
+
+        // KLJUČNO: Ime eventa mora biti 'table_updated' (kao u Python backendu)
+        socket.on('table_updated', (message) => {
+            console.log("Stiglo RabbitMQ/Socket ažuriranje:", message);
+            
+            // Ako se ažuriranje tiče ovog eventa, osvježi prikaz
+            // (message.event_id dolazi kao string ili int, pa koristimo labavu usporedbu == za svaki slučaj)
+            if (message.event_id == eventId) {
+                console.log("Osvježavam tablicu...");
+                loadTables(); 
+            }
+        });
+
+        // ========== LOGIKA APLIKACIJE ==========
 
         function checkUser() {
-            const username = localStorage.getItem('username');
-            console.log("Username:", username);
             if (!username) {
                 window.location.href = '/index.html';
                 return false;
@@ -32,84 +89,81 @@
             return true;
         }
 
-        const urlParams = new URLSearchParams(window.location.search);
-        const eventId = urlParams.get('event_id');
-        const eventName = urlParams.get('event_name');
-        const username = localStorage.getItem('username');
-
-        console.log("Event ID:", eventId);
-        console.log("Username:", username);
-
-        document.getElementById('eventTitle').textContent = eventName || 'Stolovi';
-        document.getElementById('backBtn').onclick = () => window.history.back();
-
-        function checkIfHasTicket() {
-            const url = `/api/users/${username}/has-ticket/${eventId}`;
-            console.log("GET na:", url);
-            
-            return fetch(url)
-                .then(r => {
-                    console.log("Response status:", r.status);
-                    return r.json();
-                })
-                .then(data => {
-                    console.log("Has ticket response:", data);
-                    return data.hasTicket || false;
-                })
-                .catch(err => {
-                    console.error('Greška pri check-u:', err);
-                    return false;
-                });
+        async function checkIfHasTicket() {
+            try {
+                const url = `/api/users/${username}/has-ticket/${eventId}`;
+                const response = await fetch(url);
+                const data = await response.json();
+                return data.hasTicket || false;
+            } catch (err) {
+                console.error('Greška pri provjeri karte:', err);
+                return false;
+            }
         }
 
-        async function loadTables() {
-            console.log("Počinjem provjeru karte...");
-            const hasTicket = await checkIfHasTicket();
-            console.log("Has ticket?", hasTicket);
-            
-            if (!hasTicket) {
-                console.log("Korisnik NEMA kartu - pokazujem no-access");
-                document.getElementById('tables').style.display = 'none';
+        async function init() {
+            if (!checkUser()) return;
+
+            // 1. Prvo provjeri kartu (Samo jednom!)
+            userHasTicket = await checkIfHasTicket();
+
+            document.getElementById('loading').style.display = 'none';
+
+            if (!userHasTicket) {
+                // Ako nema kartu, prikaži poruku i gumb za kupnju
                 document.getElementById('noAccess').classList.remove('hidden');
-                
                 document.getElementById('buyBtn').onclick = () => {
                     window.location.href = `/buy-ticket.html?event_id=${eventId}&event_name=${encodeURIComponent(eventName)}`;
                 };
-                return;
+            } else {
+                // Ako ima kartu, učitaj stolove i prikaži grid
+                document.getElementById('tables').style.display = 'grid';
+                loadTables();
             }
+        }
 
-            console.log("Korisnik IMA kartu - učitavam stolove");
+        function loadTables() {
+            // Sigurnosna provjera - ako nema kartu, ne šalji zahtjev za stolove
+            if (!userHasTicket) return;
+
             const url = `/api/events/${eventId}/tables`;
-            console.log("GET na:", url);
 
             fetch(url)
                 .then(r => r.json())
                 .then(data => {
-                    console.log("Tables response:", data);
                     const tablesDiv = document.getElementById('tables');
                     tablesDiv.innerHTML = '';
+
                     if (!data.tables || data.tables.length === 0) {
                         tablesDiv.innerHTML = '<p style="grid-column: 1/-1; text-align: center;">Nema dostupnih stolova.</p>';
                         return;
                     }
+
                     data.tables.forEach(table => {
                         const card = document.createElement('div');
+                        // Dodajemo klasu 'free' ili 'reserved' za CSS bojanje
                         card.className = `table-card ${table.status}`;
 
                         const num = document.createElement('div');
                         num.className = 'table-number';
-                        num.textContent = `🪑 ${table.number}`;
+                        num.textContent = `Stol ${table.number}`;
 
                         const status = document.createElement('div');
                         status.className = 'table-status';
-                        status.textContent = table.status === 'free' ? '✅ Slobodan' : '❌ Rezerviran';
+                        // Prevodimo status na hrvatski
+                        status.textContent = table.status === 'free' ? 'Slobodan' : 'Rezerviran';
 
                         const btn = document.createElement('button');
+                        
+                        // Logika gumba
                         if (table.status === 'free') {
-                            btn.textContent = '📝 Rezerviraj';
+                            btn.textContent = 'Rezerviraj';
+                            btn.className = 'btn-reserve';
                             btn.onclick = () => confirmReserve(table);
                         } else {
-                            btn.textContent = '🚫 Otkaži';
+                            btn.textContent = 'Otkaži'; 
+                            btn.className = 'btn-cancel';
+                            // U realnoj aplikaciji ovdje bi provjerili je li to MOJA rezervacija
                             btn.onclick = () => confirmCancel(table);
                         }
 
@@ -137,20 +191,36 @@
         }
 
         function reserveTable(tableId) {
+            // Šaljemo zahtjev. NE zovemo loadTables() ručno ovdje.
+            // Čekamo da Backend -> RabbitMQ -> Socket.IO javi da je gotovo.
+            // Tako dokazujemo da sustav radi u realnom vremenu.
             fetch(`/api/events/${eventId}/tables/${tableId}/reserve`, {
                 method: 'POST'
-            }).then(r => r.json()).then(() => loadTables());
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (!data.success) {
+                    alert("Greška: " + data.message);
+                }
+            })
+            .catch(err => alert("Greška u komunikaciji"));
         }
 
         function cancelTable(tableId) {
             fetch(`/api/events/${eventId}/tables/${tableId}/cancel`, {
                 method: 'POST'
-            }).then(r => r.json()).then(() => loadTables());
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (!data.success) {
+                    alert("Greška: " + data.message);
+                }
+            });
         }
 
-        if (checkUser()) {
-            loadTables();
-        }
+        // Pokretanje aplikacije
+        init();
+
     </script>
 </body>
 </html>
