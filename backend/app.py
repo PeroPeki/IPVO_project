@@ -272,6 +272,13 @@ def has_ticket(username, event_id):
     ticket = tickets_col.find_one({"username": username, "event_id": event_id})
     return jsonify({"hasTicket": ticket is not None}), 200
 
+@app.route('/api/reports', methods=['GET'])
+def get_reports():
+    # Dohvati zadnjih 10 izvještaja
+    reports = list(db.reports.find({}, {"_id": 0}).sort("date", -1).limit(10))
+    return jsonify({"reports": reports})
+
+
 # ==========================================
 # MAIN ENTRY POINT
 # ==========================================
