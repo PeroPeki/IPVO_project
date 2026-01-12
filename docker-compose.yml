@@ -69,6 +69,25 @@ services:
     networks:
       - app-net
 
+  analytics_worker:
+    build: ./backend
+    # -A tasks: tasks
+    # worker: pokreni radnika
+    # --beat: pokreni i sat (timer) unutar istog kontejnera
+    # --loglevel=info: da vidimo što radi
+    command: celery -A tasks worker --beat --loglevel=info
+    volumes:
+      - ./backend:/app
+    environment:
+      - MONGO_URI=mongodb://mongo:27017
+      - RABBITMQ_URI=amqp://guest:guest@rabbitmq:5672/
+    depends_on:
+      - mongo
+      - rabbitmq
+    networks:
+      - app-net
+
+
   mongo:
     image: mongo:7.0
     container_name: mongo
