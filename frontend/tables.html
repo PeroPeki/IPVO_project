@@ -33,6 +33,14 @@
     <script>
         console.log("tables.html UCITAN");
 
+        window.addEventListener('pageshow', function(event) {
+            if (event.persisted) {
+                console.log("Stranica učitana iz back-forward cachea. Osvježavam podatke...");
+                // Ponovno pokrećemo init() jer se stanje možda promijenilo
+                init(); 
+            }
+        });
+
         const urlParams = new URLSearchParams(window.location.search);
         const eventId = urlParams.get('event_id');
         const eventName = urlParams.get('event_name');

@@ -1,7 +1,7 @@
 from gevent import monkey
 monkey.patch_all()
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, session
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from pymongo import MongoClient
 from datetime import datetime
@@ -10,9 +10,12 @@ import pika
 import json
 import threading
 import time
+import redis
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret!'
+
+cache = redis.Redis(host='redis', port=6379, db=0)
 
 # Inicijalizacija SocketIO s podrškom za CORS
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
@@ -110,12 +113,12 @@ def listen_to_rabbitmq():
         
         channel.queue_bind(exchange='table_events', queue=queue_name)
         
-        print(f" [*] Backend Consumer sluša na redu: {queue_name}")
+        print(f"Backend Consumer sluša na redu: {queue_name}")
 
         def callback(ch, method, properties, body):
             try:
                 data = json.loads(body)
-                print(f" [x] RabbitMQ -> SocketIO: {data}")
+                print(f"RabbitMQ -> SocketIO: {data}")
                 
                 # OVDJE se događa 'Real-Time' magija:
                 # Šaljemo podatak svim spojenim klijentima
@@ -133,7 +136,7 @@ def listen_to_rabbitmq():
         channel.start_consuming()
         
     except Exception as e:
-        print(f" [!] RabbitMQ Consumer Thread umro: {e}")
+        print(f"RabbitMQ Consumer Thread umro: {e}")
 
 # Pokreni RabbitMQ Consumera u pozadini
 # Daemon=True znači da će se ugasiti kad se ugasi glavna aplikacija
@@ -178,73 +181,118 @@ def get_events(club_id):
     events = list(events_col.find({"club_id": club_id}, {"_id": 0}))
     return jsonify({"events": events})
 
+
+
+# ==========================================
+# REDIS
+# ==========================================
+
+
+
+import json
+from flask import jsonify, request, session
+from datetime import datetime
+
 @app.route('/api/events/<event_id>/tables', methods=['GET'])
 def get_tables(event_id):
-    tables = list(tables_col.find({"event_id": event_id}, {"_id": 0}))
+    """Dohvaćanje stolova s cachingom u Redis"""
+    
+    cache_key = f'tables_list_{event_id}'
+    cached_data = cache.get(cache_key)
+    
+    if cached_data:
+        print(f"Dohvaćam stolove iz Redisa! (event: {event_id})")
+        # Vrati JSON iz cachea
+        return jsonify({"tables": json.loads(cached_data)})
+    
+    print(f"Dohvaćam stolove iz MongoDB... (event: {event_id})")
+    
+    tables = list(tables_col.find({"event_id": event_id}))
+    
+    # Kovertiraj ObjectId u stringove za JSON serializaciju
+    for table in tables:
+        table['_id'] = str(table['_id'])
+    
+    # Spremanje liste stolova u Redis cache na 1 sat (3600 sekundi)
+    cache.setex(cache_key, 3600, json.dumps(tables))
+    
     return jsonify({"tables": tables})
+
 
 @app.route('/api/events/<event_id>/tables/<table_id>/reserve', methods=['POST'])
 def reserve_table(event_id, table_id):
-    """
-    Rezervira stol i šalje notifikaciju kroz RabbitMQ.
-    """
-    # 1. Provjeri stol
-    table = tables_col.find_one({"event_id": event_id, "id": table_id})
-    if not table:
-        return jsonify({"success": False, "message": "Stol ne postoji"}), 404
-        
-    if table.get("status") == "reserved":
-        return jsonify({"success": False, "message": "Već rezervirano"}), 409
-
-    # 2. Ažuriraj u bazi
-    tables_col.update_one(
-        {"event_id": event_id, "id": table_id},
-        {"$set": {"status": "reserved"}}
+    """Rezervacija stola - s invalidacijom Redis cachea"""
+    
+    user_name = session.get('username')
+    
+    # Update samo ako je stol 'free'
+    result = tables_col.update_one(
+        {"event_id": event_id, "id": table_id, "status": "free"},
+        {"$set": {"status": "reserved", "reserved_by": user_name}}
     )
     
-    reservations_col.insert_one({
-        "event_id": event_id,
-        "table_id": table_id,
-        "status": "booked",
-        "timestamp": datetime.utcnow().isoformat()
-    })
+    if result.modified_count > 0:
+        # Zabilježi u kolekciju
+        reservations_col.insert_one({
+            "event_id": event_id,
+            "table_id": table_id,
+            "user": user_name,
+            "status": "booked",
+            "timestamp": datetime.utcnow().isoformat()
+        })
+        
+        # Pošalji event kroz RabbitMQ
+        publish_to_rabbitmq({
+            "type": "RESERVED",
+            "event_id": event_id,
+            "table_id": table_id,
+            "status": "reserved"
+        })
+        
+        # Brisanje cachea da bi se osvježio pri idućem dohvaćanju
+        cache_key = f'tables_list_{event_id}'
+        cache.delete(cache_key)
+        print(f"Cache obrisan (rezervacija) za event: {event_id}")
+        
+        return jsonify({"success": True, "message": "Stol je rezerviran"}), 200
+    
+    return jsonify({"success": False, "message": "Stol nije dostupan"}), 409
 
-    # 3. Pošalji u RabbitMQ (Consumer će odraditi socket emit)
-    publish_to_rabbitmq({
-        "type": "RESERVED",
-        "event_id": event_id,
-        "table_id": table_id,
-        "status": "reserved"
-    })
-
-    return jsonify({"success": True, "message": "Rezervirano"}), 200
 
 @app.route('/api/events/<event_id>/tables/<table_id>/cancel', methods=['POST'])
 def cancel_table(event_id, table_id):
-    """
-    Otkaži rezervaciju i šalje notifikaciju kroz RabbitMQ.
-    """
+    """Otkazivanje rezervacije - s invalidacijom cachea"""
+    
     table = tables_col.find_one({"event_id": event_id, "id": table_id})
+    
     if not table:
         return jsonify({"success": False, "message": "Stol ne postoji"}), 404
-        
+    
     if table.get("status") == "free":
         return jsonify({"success": False, "message": "Stol je već slobodan"}), 409
-
+    
+    # Update u bazi
     tables_col.update_one(
         {"event_id": event_id, "id": table_id},
         {"$set": {"status": "free"}}
     )
     
-    # Pošalji u RabbitMQ
+    # Pošalji event
     publish_to_rabbitmq({
         "type": "CANCELED",
         "event_id": event_id,
         "table_id": table_id,
         "status": "free"
     })
+    
+    # Obriši cache
+    cache_key = f'tables_list_{event_id}'
+    cache.delete(cache_key)
+    print(f"Cache obrisan (otkazivanje) za event: {event_id}")
+    
+    return jsonify({"success": True, "message": "Rezervacija je otkazana"}), 200
 
-    return jsonify({"success": True, "message": "Otkazano"}), 200
+
 
 # Korisnici i ulaznice (User management)
 @app.route('/api/users', methods=['POST'])
@@ -277,6 +325,9 @@ def get_reports():
     # Dohvati zadnjih 10 izvještaja
     reports = list(db.reports.find({}, {"_id": 0}).sort("date", -1).limit(10))
     return jsonify({"reports": reports})
+
+
+
 
 
 # ==========================================
