@@ -4,3 +4,8 @@
 # Python
 venv/
 __pycache__/
+
+celerybeat-schedule
+celerybeat-schedule.db
+celerybeat-schedule.dat
+celerybeat-schedule.dir
