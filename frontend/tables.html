@@ -18,7 +18,14 @@
         </div>
         
         <div id="loading" style="text-align: center; margin-top: 20px;">Učitavanje...</div>
-        
+
+        <div id="pricing-info" class="pricing-banner hidden" style="margin: 15px 0; padding: 12px 16px; background: #f4f4f8; border-left: 4px solid #5b8def; border-radius: 6px;">
+            <span id="current-price" style="font-weight: 600;">Cijena: --</span>
+            <span id="price-warning" class="hidden warning-badge" style="margin-left: 12px; padding: 4px 10px; background: #fff3cd; color: #856404; border-radius: 4px; font-size: 13px;">
+                ⚠️ Visoka potražnja – cijena bi uskoro mogla porasti
+            </span>
+        </div>
+
         <div id="tables" class="tables-grid" style="display: none;"></div>
         
         <div id="noAccess" class="no-access hidden">
@@ -127,6 +134,32 @@
                 // Ako ima kartu, učitaj stolove i prikaži grid
                 document.getElementById('tables').style.display = 'grid';
                 loadTables();
+                loadEventPricing();
+            }
+        }
+
+        async function loadEventPricing() {
+            try {
+                const res = await fetch(`/api/events/${eventId}/pricing`);
+                if (!res.ok) return;
+                const data = await res.json();
+
+                const basePrice = data.base_price || 0;
+                const currentPrice = data.current_price || 0;
+                if (!currentPrice) return;
+
+                document.getElementById('pricing-info').classList.remove('hidden');
+                document.getElementById('current-price').textContent =
+                    `Cijena rezervacije: ${currentPrice.toFixed(2)} EUR`;
+
+                const warning = document.getElementById('price-warning');
+                if (basePrice > 0 && currentPrice > basePrice * 1.2) {
+                    warning.classList.remove('hidden');
+                } else {
+                    warning.classList.add('hidden');
+                }
+            } catch (err) {
+                console.warn('Pricing podaci nisu dostupni:', err);
             }
         }
 

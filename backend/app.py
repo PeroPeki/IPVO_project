@@ -90,6 +90,9 @@ tables_col = db["tables"]
 reservations_col = db["reservations"]
 users_col = db["users"]
 tickets_col = db["tickets"]
+price_log_col = db["price_log"]
+ml_training_col = db["ml_training_data"]
+model_metadata_col = db["model_metadata"]
 
 # ==========================================
 # RABBITMQ FUNKCIONALNOST (Producer & Consumer)
@@ -383,6 +386,108 @@ def get_reports():
     # Dohvati zadnjih 10 izvještaja
     reports = list(db.reports.find({}, {"_id": 0}).sort("date", -1).limit(10))
     return jsonify({"reports": reports})
+
+
+# ==========================================
+# FAZA 4 – DYNAMIC PRICING INTEGRACIJA
+# ==========================================
+
+def calculate_tickets_sold_ratio(event_id):
+    """Izračunava udio rezerviranih stolova iz internih podataka."""
+    try:
+        total = tables_col.count_documents({"event_id": event_id})
+        reserved = tables_col.count_documents(
+            {"event_id": event_id, "status": "reserved"}
+        )
+        return round(reserved / total, 2) if total > 0 else 0.0
+    except Exception:
+        return 0.5
+
+
+def request_price_update(event_id, event_data):
+    """Šalje zahtjev za ažuriranjem cijene asinkrono putem RabbitMQ-a."""
+    try:
+        connection = get_rabbitmq_connection()
+        channel = connection.channel()
+        channel.queue_declare(queue="price_update_queue", durable=True)
+
+        message = {
+            "event_id": str(event_id),
+            "artist_listeners": event_data.get("artist_listeners", 0),
+            "artist_playcount": event_data.get("artist_playcount", 0),
+            "genre_encoded": event_data.get("genre_encoded", 0),
+            "venue_capacity": event_data.get("venue_capacity", 500),
+            "days_until_event": event_data.get("days_until_event", 30),
+            "tickets_sold_ratio": calculate_tickets_sold_ratio(event_id),
+            "day_of_week": datetime.utcnow().weekday(),
+            "current_price": event_data.get("current_price", 60.0),
+        }
+
+        channel.basic_publish(
+            exchange="",
+            routing_key="price_update_queue",
+            body=json.dumps(message),
+            properties=pika.BasicProperties(delivery_mode=2),
+        )
+        connection.close()
+    except Exception as e:
+        print(f"Greška pri slanju price update zahtjeva: {e}")
+
+
+@app.route('/api/price-log', methods=['GET'])
+def get_price_log():
+    """Vraća zadnjih 50 zapisa promjene cijena."""
+    logs = list(
+        price_log_col.find({}, {"_id": 0}).sort("timestamp", -1).limit(50)
+    )
+    for log in logs:
+        if isinstance(log.get("timestamp"), datetime):
+            log["timestamp"] = log["timestamp"].isoformat()
+    return jsonify({"price_log": logs})
+
+
+@app.route('/api/model-status', methods=['GET'])
+def get_model_status():
+    """Proxy prema /model-info endpointu Prediction Servicea."""
+    import requests as req
+    try:
+        response = req.get("http://prediction_service:6000/model-info", timeout=5)
+        return jsonify(response.json())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 503
+
+
+@app.route('/api/events/<event_id>/pricing', methods=['GET'])
+def get_event_pricing(event_id):
+    """Vraća pricing podatke (base/current/min/max) za pojedini event."""
+    event = events_col.find_one({"id": event_id}) or events_col.find_one(
+        {"ticketmaster_id": event_id}
+    )
+    if not event:
+        return jsonify({"error": "Event ne postoji"}), 404
+
+    return jsonify({
+        "event_id": event_id,
+        "base_price": event.get("base_price"),
+        "current_price": event.get("current_price"),
+        "min_price": event.get("min_price"),
+        "max_price": event.get("max_price"),
+        "artist_name": event.get("artist_name"),
+        "venue_capacity": event.get("venue_capacity"),
+    })
+
+
+@app.route('/api/events/<event_id>/request-price-update', methods=['POST'])
+def trigger_price_update(event_id):
+    """Ručno okidanje price update zahtjeva za pojedini event."""
+    event = events_col.find_one({"id": event_id}) or events_col.find_one(
+        {"ticketmaster_id": event_id}
+    )
+    if not event:
+        return jsonify({"success": False, "message": "Event ne postoji"}), 404
+
+    request_price_update(event.get("id") or event.get("ticketmaster_id"), event)
+    return jsonify({"success": True, "message": "Price update zahtjev poslan"}), 202
 
 
 

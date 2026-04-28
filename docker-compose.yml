@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   traefik:
     image: traefik:v2.11
@@ -51,18 +49,21 @@ services:
     build: ./backend
     volumes:
       - ./backend:/app
+      - models:/app/models
     environment:
       - FLASK_ENV=development
       - FLASK_DEBUG=1
       - MONGO_URI=mongodb://mongo:27017
       - RABBITMQ_URI=amqp://guest:guest@rabbitmq:5672/
+      - TICKETMASTER_API_KEY=${TICKETMASTER_API_KEY:-}
+      - LASTFM_API_KEY=${LASTFM_API_KEY:-}
     depends_on:
       - mongo
       - rabbitmq
     labels:
       - "traefik.enable=true"
-      # Hvatamo API i WebSocket promet
-      - 'traefik.http.routers.api.rule=Host("localhost") && (PathPrefix("/api") || PathPrefix("/socket.io"))'
+      # Hvatamo API, WebSocket i /metrics promet
+      - 'traefik.http.routers.api.rule=Host("localhost") && (PathPrefix("/api") || PathPrefix("/socket.io") || PathPrefix("/metrics"))'
       # BITNO: Dajemo veći prioritet da frontend ne "proguta" ove zahtjeve
       - "traefik.http.routers.api.priority=100"
       - "traefik.http.routers.api.entrypoints=web"
@@ -82,15 +83,38 @@ services:
     command: celery -A tasks worker --beat --loglevel=info
     volumes:
       - ./backend:/app
+      - models:/app/models
     environment:
       - MONGO_URI=mongodb://mongo:27017
       - RABBITMQ_URI=amqp://guest:guest@rabbitmq:5672/
+      - TICKETMASTER_API_KEY=${TICKETMASTER_API_KEY:-}
+      - LASTFM_API_KEY=${LASTFM_API_KEY:-}
     depends_on:
       - mongo
       - rabbitmq
     networks:
       - app-net
 
+  prediction_service:
+    build: ./prediction_service
+    container_name: prediction_service
+    volumes:
+      - models:/app/models
+    environment:
+      - MONGO_URI=mongodb://mongo:27017
+      - RABBITMQ_URI=amqp://guest:guest@rabbitmq:5672/
+    depends_on:
+      - mongo
+      - rabbitmq
+      - redis
+    labels:
+      - "traefik.enable=true"
+      - 'traefik.http.routers.predict.rule=Host("localhost") && (PathPrefix("/predict-price") || PathPrefix("/model-info"))'
+      - "traefik.http.routers.predict.priority=200"
+      - "traefik.http.routers.predict.entrypoints=web"
+      - "traefik.http.services.predict.loadbalancer.server.port=6000"
+    networks:
+      - app-net
 
   mongo:
     image: mongo:7.0
@@ -166,3 +190,4 @@ networks:
 
 volumes:
   mongo_: {}
+  models: {}

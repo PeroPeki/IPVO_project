@@ -6,9 +6,13 @@ result_backend = 'rpc://'
 
 # Definiranje periodičnih zadataka
 beat_schedule = {
-    'generate-daily-report-every-minute': { # Ime zadatka
-        'task': 'tasks.generate_daily_report', # Pozivana funkcija
-        'schedule': 60.0, # Svakih 60 sekundi
+    'generate-daily-report-every-minute': {
+        'task': 'tasks.generate_daily_report',
+        'schedule': 60.0,
+    },
+    'run-data-pipeline-daily': {
+        'task': 'tasks.run_data_pipeline',
+        'schedule': 86400.0,  # jednom dnevno
     },
 }
 
