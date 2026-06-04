@@ -395,9 +395,9 @@ Socket.IO event `table_updated` is broadcast to **all** connected clients whenev
 cp .env.example .env
 # Edit .env and fill in TICKETMASTER_API_KEY and LASTFM_API_KEY
 
-# 2. Build and start the entire stack
-docker compose build
-docker compose up -d
+# 2. Build images and start the entire stack
+docker compose up -d --build
+# Builds all images fresh and starts all services in detached mode
 
 # 3. Watch the pipeline run automatically
 docker compose logs analytics_worker -f --tail=60
@@ -407,21 +407,22 @@ docker compose logs analytics_worker -f --tail=60
 # --- ML model (optional, for dynamic pricing) ---
 
 # 4. Generate the training dataset (~30 min, hits Last.fm API)
-docker compose exec backend python generate_training_data.py
+docker compose exec analytics_worker python generate_training_data.py
+# Fetches top artists per genre from Last.fm, writes ~33 000 training rows to MongoDB
 
 # 5. Train the model (RF vs XGBoost, picks lower RMSE)
-docker compose exec backend python train_model.py
+docker compose exec analytics_worker python train_model.py
+# Trains both models, saves the winner to the shared models volume
 
 # 6. Reload the prediction service so it picks up the new model
 docker compose restart prediction_service
+# Forces the prediction service to reload pricing_model.pkl from disk
 
 # --- Utilities ---
 
 # Manually re-trigger the data pipeline (e.g. after API key change)
 docker compose exec analytics_worker celery -A tasks call tasks.run_data_pipeline
-
-# Re-run seed (clears old data, recreates indexes)
-docker compose run --rm seed
+# Queues a new pipeline run immediately without waiting for the schedule
 ```
 
 ### Endpoints

@@ -9,6 +9,7 @@ from bson import ObjectId
 import pika
 import json
 import threading
+from gevent.lock import RLock
 import time
 import redis
 import requests as ext_requests
@@ -113,6 +114,8 @@ def ensure_indexes():
         tables_col.create_index([("event_id", 1)])
         tables_col.create_index([("id", 1)])
         reservations_col.create_index([("event_id", 1), ("table_id", 1)])
+        price_log_col.create_index([("timestamp", -1)])
+        ml_training_col.create_index([("artist_name", 1)])
         print("[indexes] MongoDB indeksi su osigurani.")
     except Exception as exc:
         print(f"[indexes] Greška pri kreiranju indeksa: {exc}")
@@ -604,7 +607,7 @@ def calculate_tickets_sold_ratio(event_id):
         return 0.5
 
 
-_rabbitmq_lock = threading.Lock()
+_rabbitmq_lock = RLock()
 _rabbitmq_pool_connection = None
 _rabbitmq_pool_channel = None
 

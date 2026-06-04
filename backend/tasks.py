@@ -28,6 +28,25 @@ app = Celery('tasks')
 app.config_from_object('celery_config')
 
 
+def _ensure_indexes_worker():
+    """Osigurava MongoDB indekse pri startu analytics_workera (idempotentno)."""
+    try:
+        _client = MongoClient("mongodb://mongo:27017")
+        _db = _client["mydb"]
+        _db["events"].create_index([("ticketmaster_id", 1)], unique=True, sparse=True)
+        _db["events"].create_index([("club_id", 1)])
+        _db["tables"].create_index([("event_id", 1)])
+        _db["price_log"].create_index([("timestamp", -1)])
+        _db["ml_training_data"].create_index([("artist_name", 1)])
+        _client.close()
+        print("[worker-indexes] MongoDB indeksi osigurani.")
+    except Exception as exc:
+        print(f"[worker-indexes] Greška: {exc}")
+
+
+_ensure_indexes_worker()
+
+
 GENRE_NAME_BY_CODE = {v: k for k, v in GENRE_MAP.items()}
 
 
