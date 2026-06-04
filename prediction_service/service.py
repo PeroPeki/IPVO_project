@@ -10,12 +10,14 @@ import json
 import math
 import os
 import threading
+import time
 from datetime import datetime
 
 import joblib
 import numpy as np
 import pika
 import redis
+import requests
 from bson import ObjectId
 from flask import Flask, jsonify, request
 from pymongo import MongoClient
@@ -37,6 +39,10 @@ except FileNotFoundError:
 
 cache = redis.Redis(host="redis", port=6379, db=0)
 
+# Globalna MongoDB konekcija s connection poolom
+mongo_client = MongoClient("mongodb://mongo:27017", maxPoolSize=10)
+db = mongo_client["mydb"]
+
 
 def prepare_input(data):
     """Iz dolaznog JSON-a slaže feature vektor u redoslijedu kakav model očekuje."""
@@ -54,11 +60,27 @@ def prepare_input(data):
     return np.array([[features[col] for col in feature_cols]])
 
 
+def _notify_backend_price_change(event_id, new_price):
+    """Šalje backendu notifikaciju da emitira price_updated socket event."""
+    try:
+        # Dohvati base_price iz baze za high_demand izračun
+        event_doc = db.events.find_one(
+            {"$or": [{"id": event_id}, {"ticketmaster_id": event_id}]},
+            {"base_price": 1},
+        )
+        base_price = (event_doc or {}).get("base_price") or new_price
+        requests.post(
+            f"http://backend:5000/api/events/{event_id}/notify-price-change",
+            json={"new_price": new_price, "base_price": base_price},
+            timeout=3,
+        )
+    except Exception as exc:
+        print(f"Notify backend greška: {exc}")
+
+
 def log_price_change(event_id, old_price, new_price):
     """Sprema promjenu cijene u price_log i ažurira current_price na eventu."""
     try:
-        client = MongoClient("mongodb://mongo:27017")
-        db = client["mydb"]
         db.price_log.insert_one({
             "event_id": event_id,
             "timestamp": datetime.utcnow(),
@@ -66,17 +88,27 @@ def log_price_change(event_id, old_price, new_price):
             "new_price": new_price,
             "reason": "ML model dynamic pricing update",
         })
+
+        updated = False
         try:
-            db.events.update_one(
+            res = db.events.update_one(
                 {"_id": ObjectId(event_id)},
                 {"$set": {"current_price": new_price}},
             )
+            updated = res.modified_count > 0
         except Exception:
+            updated = False
+
+        if not updated:
             db.events.update_one(
-                {"id": event_id},
+                {"$or": [{"id": event_id}, {"ticketmaster_id": event_id}]},
                 {"$set": {"current_price": new_price}},
             )
-        client.close()
+
+        cache.delete(f"event_pricing_{event_id}")
+
+        # Obavijesti backend da emitira WebSocket event klijentima
+        _notify_backend_price_change(event_id, new_price)
     except Exception as exc:
         print(f"Greška pri unosu u price_log: {exc}")
 
@@ -125,9 +157,7 @@ def health():
 @app.route("/model-info", methods=["GET"])
 def model_info():
     try:
-        client = MongoClient("mongodb://mongo:27017")
-        meta = client["mydb"].model_metadata.find_one({}, sort=[("trained_at", -1)])
-        client.close()
+        meta = db.model_metadata.find_one({}, sort=[("trained_at", -1)])
         if meta:
             meta["_id"] = str(meta["_id"])
             if isinstance(meta.get("trained_at"), datetime):
@@ -138,39 +168,56 @@ def model_info():
 
 
 def consume_price_requests():
-    """RabbitMQ consumer u pozadinskoj dretvi."""
-    try:
-        connection = pika.BlockingConnection(
-            pika.ConnectionParameters(host="rabbitmq")
-        )
-        channel = connection.channel()
-        channel.queue_declare(queue="price_update_queue", durable=True)
-
-        def callback(ch, method, properties, body):
-            try:
-                data = json.loads(body)
-                predicted_price = round(
-                    max(10.0, float(model.predict(prepare_input(data))[0])), 2
+    """RabbitMQ consumer s automatskim reconnectom u pozadinskoj dretvi."""
+    while True:
+        try:
+            connection = pika.BlockingConnection(
+                pika.ConnectionParameters(
+                    host="rabbitmq",
+                    heartbeat=600,
+                    blocked_connection_timeout=300,
                 )
-                event_id = data.get("event_id")
-                current_price = float(data.get("current_price", predicted_price))
-                if event_id and abs(predicted_price - current_price) > 5.0:
-                    log_price_change(event_id, current_price, predicted_price)
-                ch.basic_ack(delivery_tag=method.delivery_tag)
-            except Exception as exc:
-                print(f"Consumer greška: {exc}")
-                ch.basic_nack(delivery_tag=method.delivery_tag)
+            )
+            channel = connection.channel()
+            channel.queue_declare(queue="price_update_queue", durable=True)
+            channel.basic_qos(prefetch_count=1)
 
-        channel.basic_consume(
-            queue="price_update_queue", on_message_callback=callback
-        )
-        print("Prediction Service consumer aktivan na queueu 'price_update_queue'")
-        channel.start_consuming()
-    except Exception as exc:
-        print(f"RabbitMQ consumer greška: {exc}")
+            def callback(ch, method, properties, body):
+                try:
+                    if model is None:
+                        # Model nije učitan – vraćamo poruku natrag u queue, pauziramo 30s
+                        print("Consumer: model nije učitan, requeueam poruku.")
+                        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+                        time.sleep(30)
+                        return
+                    data = json.loads(body)
+                    predicted_price = round(
+                        max(10.0, float(model.predict(prepare_input(data))[0])), 2
+                    )
+                    event_id = data.get("event_id")
+                    current_price = float(data.get("current_price", predicted_price))
+                    if event_id and abs(predicted_price - current_price) > 5.0:
+                        log_price_change(event_id, current_price, predicted_price)
+                    ch.basic_ack(delivery_tag=method.delivery_tag)
+                except Exception as exc:
+                    print(f"Consumer greška pri obradi poruke: {exc}")
+                    ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+
+            channel.basic_consume(
+                queue="price_update_queue", on_message_callback=callback
+            )
+            print("Prediction Service consumer aktivan na queueu 'price_update_queue'")
+            channel.start_consuming()
+
+        except pika.exceptions.AMQPConnectionError as exc:
+            print(f"RabbitMQ nedostupan, pokušavam za 10s: {exc}")
+            time.sleep(10)
+        except Exception as exc:
+            print(f"Consumer neočekivana greška, restart za 5s: {exc}")
+            time.sleep(5)
 
 
 if __name__ == "__main__":
-    if model is not None:
-        threading.Thread(target=consume_price_requests, daemon=True).start()
+    # Consumer se uvijek pokreće – ako model nedostaje, odbacuje poruke (NACK, no-requeue)
+    threading.Thread(target=consume_price_requests, daemon=True).start()
     app.run(host="0.0.0.0", port=6000, debug=False)

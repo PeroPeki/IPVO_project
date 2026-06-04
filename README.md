@@ -10,7 +10,7 @@
 ![ML](https://img.shields.io/badge/ML-XGBoost%20%2F%20scikit--learn-EE4C2C)
 ![Monitoring](https://img.shields.io/badge/monitoring-Prometheus%20%2B%20Grafana-E6522C)
 
-The platform lets visitors browse nightclub events, purchase tickets and reserve tables in real time. Behind the user-facing UI sits a load-balanced Flask backend, an asynchronous message bus, a Redis read-cache, an automated data pipeline that ingests live event information from Ticketmaster and Last.fm, and a dedicated machine-learning microservice that produces dynamic table-pricing predictions.
+The platform lets visitors browse real, live music events from around the world, purchase tickets and reserve tables in real time. Behind the UI sits a load-balanced Flask backend, an asynchronous message bus, a Redis read-cache, an automated global data pipeline that ingests live event information from Ticketmaster and Last.fm, and a dedicated machine-learning microservice that produces dynamic table-pricing predictions.
 
 ---
 
@@ -35,13 +35,14 @@ The platform lets visitors browse nightclub events, purchase tickets and reserve
 
 | Capability | Detail |
 |------------|--------|
-| **Browse and book** | Users log in with a username, browse a curated catalogue of clubs and events, purchase a ticket and reserve any of the available tables for that event. |
+| **Global live events** | Every club/venue and event in the system is fetched in real time from the Ticketmaster Discovery API across 20 cities worldwide (Europe, North America, Australia). No hardcoded data. |
+| **Browse and book** | Users log in with a username, browse venues and real upcoming events, purchase a ticket and reserve any of the available tables for that event. |
 | **Real-time updates** | Every reservation or cancellation propagates to all connected browsers within milliseconds via RabbitMQ → Socket.IO, eliminating the need for manual refresh. |
-| **Horizontal scalability** | Two NGINX replicas serve the frontend behind a Traefik load balancer; the Flask backend is also exposed through the same load-balancer service with sticky cookies for WebSocket affinity. |
-| **High-throughput reads** | Frequently requested table lists are cached in Redis with deterministic invalidation on every write, so reads never block on MongoDB. |
+| **Horizontal scalability** | Two NGINX replicas serve the frontend behind a Traefik load balancer; the Flask backend is also load-balanced with sticky cookies for WebSocket affinity. |
+| **High-throughput reads** | Frequently requested table lists and event feeds are cached in Redis with deterministic invalidation on every write. |
 | **Periodic analytics** | A Celery worker with an embedded beat scheduler aggregates reservation and ticket metrics into a `reports` collection on a recurring schedule. |
-| **Live data ingestion** | A scheduled pipeline pulls upcoming music events from the Ticketmaster Discovery API for ten European capitals and enriches each artist with Last.fm popularity signals. |
-| **Dynamic pricing with ML** | A regression model (Random Forest vs XGBoost, lower-RMSE wins) predicts an optimal table price for each event from real-world artist popularity, venue capacity, urgency, genre and demand features. |
+| **Live data ingestion** | A scheduled pipeline pulls upcoming music events from the Ticketmaster Discovery API for 20 global cities and enriches each artist with Last.fm popularity signals. On first boot the pipeline triggers automatically if the database is empty. |
+| **Dynamic pricing with ML** | A regression model (Random Forest vs XGBoost, lower-RMSE wins) predicts an optimal table price from real-world artist popularity, venue capacity, urgency, genre and demand features. |
 | **Asynchronous price updates** | The backend publishes feature payloads to a durable RabbitMQ queue; a dedicated prediction microservice consumes them, runs inference, logs the change and updates the affected event. |
 | **End-to-end observability** | Custom backend metrics (request count, latency histogram) and edge-proxy metrics (Traefik) are scraped by Prometheus and visualised in Grafana. |
 
@@ -49,14 +50,49 @@ The platform lets visitors browse nightclub events, purchase tickets and reserve
 
 ## Phase 4 Highlights — Live Data and Machine Learning
 
-The fourth phase introduces a self-contained data engineering and ML stack on top of the Phase 1–3 platform. It satisfies all five course requirements (live data, processing, storage, ML, integration) without using mock or pre-packaged datasets.
+Phase 4 introduces a self-contained data-engineering and ML stack on top of the Phase 1–3 platform. It satisfies all five course requirements (live data, processing, storage, ML, integration) without using mock or pre-packaged datasets.
 
-- **`pipeline_task.py`** — pulls real upcoming music events from Ticketmaster Discovery API for ten European capitals and enriches every artist with Last.fm `listeners`, `playcount` and top tags. A deterministic pricing formula computes a base price from popularity, venue capacity, days-until-event and genre.
-- **`generate_training_data.py`** — fetches top artists across ten music genres from Last.fm and produces a fully deterministic training set by combining each artist with ten venue-capacity tiers and eleven days-until-event scenarios. No `Faker`, no `random()` — the same inputs always yield the same outputs.
-- **`train_model.py`** — performs an 80/20 train/test split, trains a `RandomForestRegressor` and an `XGBRegressor`, compares root-mean-squared error and persists the winning model together with its feature list and a metadata document.
-- **`prediction_service/`** — a standalone Flask microservice that owns the model. It exposes `POST /predict-price` and `GET /model-info`, caches predictions in Redis with a five-minute TTL and runs a daemon thread that consumes `price_update_queue` from RabbitMQ for asynchronous repricing.
-- **Backend integration** — the Flask backend exposes `/api/events/<id>/pricing`, `/api/events/<id>/request-price-update`, `/api/price-log` and `/api/model-status`. Whenever the predicted price diverges from the current price by more than five euros the change is logged in `price_log` and reflected on the event document.
-- **Frontend integration** — `tables.html` reads the pricing endpoint and surfaces a *high-demand* banner when the current price exceeds the base price by more than twenty per cent.
+### Global data pipeline
+
+- **20 target cities** — Zagreb, London, Berlin, Amsterdam, Barcelona, Paris, Madrid, Milan, Vienna, Prague, New York, Los Angeles, Chicago, Miami, Las Vegas, Boston, Atlanta, Toronto, Sydney, Melbourne.
+- Each **Ticketmaster venue** automatically becomes a **club** in the system, keyed by a stable `tm-<venue_id>` identifier. Events are linked to their venue via `club_id`, so the existing frontend navigation (Clubs → Events → Tables) continues to work unchanged.
+- Each event is enriched with: event image, venue address, local date/time, Ticketmaster genre classification, original ticket price ranges, and a direct Ticketmaster URL.
+- Each new event automatically receives **20 reservable tables** (all free at creation).
+- **Auto-bootstrap**: on backend startup, if the `events` collection is empty, the pipeline is queued automatically via Celery — no manual step needed on first run.
+
+### Data files
+
+| File | Role |
+|------|------|
+| `pipeline_task.py` | Pure helper functions: `fetch_ticketmaster_events`, `get_lastfm_artist_data`, `encode_genre`, `calculate_base_price`, `slugify` and time utilities. |
+| `tasks.py` | Celery task `run_data_pipeline` — orchestrates the full flow: TM fetch → Last.fm enrichment → club upsert → event upsert → table creation → Redis invalidation. |
+| `generate_training_data.py` | Fetches top artists for 10 genres from Last.fm and generates a fully deterministic training set (artist × capacity tier × days-until-event). No `Faker`, no `random()`. |
+| `train_model.py` | 80/20 train/test split, trains Random Forest and XGBoost, compares RMSE, persists the winner to the shared `models` volume and writes metadata to MongoDB. |
+
+### ML feature vector
+
+All four code paths (`pipeline_task.py`, `generate_training_data.py`, `train_model.py`, `prediction_service/service.py`) use identical features in identical order:
+
+| Feature | Source | Transformation |
+|---------|--------|----------------|
+| `log_listeners` | Last.fm listeners | `log10(x + 1)` |
+| `log_playcount` | Last.fm playcount | `log10(x + 1)` |
+| `genre_encoded` | Last.fm tags → GENRE_MAP | 0–15 |
+| `venue_capacity` | Ticketmaster venue | raw integer |
+| `days_until_event` | event date – today | raw integer |
+| `tickets_sold_ratio` | deterministic formula | 0.0–1.0 |
+| `day_of_week` | event date | 0 (Mon) – 6 (Sun) |
+
+### Bug fixes included in Phase 4
+
+| Bug | Fix |
+|-----|-----|
+| `requests` module imported locally inside a function | Moved to top-level import |
+| RabbitMQ consumer only started when model was loaded | Consumer always starts; sends `NACK, requeue=False` if model missing |
+| N+1 MongoDB queries in `GET /api/clubs` | Replaced with a single `$lookup` aggregation |
+| Double query `find_one({id}) or find_one({ticketmaster_id})` | Replaced with `$or` query |
+| `depends_on: rabbitmq` without health-check condition | Changed to `condition: service_healthy` for all three consumers |
+| Duplicate `import json` / `from flask import ...` mid-file | Removed duplicate imports |
 
 ---
 
@@ -67,7 +103,7 @@ The fourth phase introduces a self-contained data engineering and ML stack on to
 | **1** | Core CRUD and horizontal scaling | Flask backend, MongoDB, Traefik load balancer, two NGINX frontend replicas, deterministic seed scripts |
 | **2** | Real-time updates and periodic analytics | RabbitMQ fanout exchange, Socket.IO, Celery worker with embedded beat, daily-report task |
 | **3** | Read-path optimisation and monitoring | Redis read-through cache with invalidation, Prometheus instrumentation, Grafana dashboards |
-| **4** | Live data, data pipeline and ML pricing | Ticketmaster + Last.fm pipeline, deterministic training-data generator, Random Forest vs XGBoost trainer, dedicated `prediction_service` microservice with RabbitMQ consumer |
+| **4** | Global live data, ML pricing, bug fixes | Ticketmaster + Last.fm pipeline (20 cities), auto-bootstrap, dynamic clubs from venues, deterministic training-data generator, Random Forest vs XGBoost trainer, dedicated `prediction_service` microservice, rich frontend (images, filtering, auto-refresh) |
 
 ---
 
@@ -109,7 +145,10 @@ The fourth phase introduces a self-contained data engineering and ML stack on to
                                                   └──────────────────┘
 ```
 
-Traefik routes traffic on `Host(localhost)` as follows: `/api`, `/socket.io` and `/metrics` are forwarded to the backend; `/predict-price` and `/model-info` reach the prediction microservice; everything else is served by the two NGINX frontends. Sticky cookies on the backend service keep WebSocket sessions pinned to a single instance.
+Traefik routes traffic on `Host(localhost)`:
+- `/api`, `/socket.io`, `/metrics` → `backend`
+- `/predict-price`, `/model-info` → `prediction_service`
+- Everything else → `web1` / `web2` (round-robin)
 
 ---
 
@@ -137,46 +176,46 @@ Traefik routes traffic on `Host(localhost)` as follows: `/api`, `/socket.io` and
 IPVO_projekt/
 ├── docker-compose.yml
 ├── README.md
-├── .env                         # Local secrets (git-ignored)
+├── context.md                       # Developer change log (what was built and why)
+├── task.md                          # Bug tracker + future tasks + recommendations
+├── .env                             # Local secrets (git-ignored)
+├── .env.example                     # Template for required environment variables
 │
 ├── frontend/
 │   ├── Dockerfile
-│   ├── index.html
-│   ├── clubs.html
-│   ├── events.html
-│   ├── buy-ticket.html
-│   ├── tables.html
+│   ├── index.html                   # Login screen
+│   ├── clubs.html                   # Venue browser with city/country filter + auto-polling
+│   ├── events.html                  # Event feed with images, artist, pricing badges
+│   ├── buy-ticket.html              # Ticket purchase with full event detail
+│   ├── tables.html                  # Real-time table reservation grid
 │   └── style.css
 │
 ├── backend/
 │   ├── Dockerfile
 │   ├── requirements.txt
-│   ├── app.py
-│   ├── tasks.py
-│   ├── celery_config.py
-│   ├── pipeline_task.py
-│   ├── generate_training_data.py
-│   ├── train_model.py
-│   └── models/                  # Mount point for the shared models volume
+│   ├── app.py                       # Flask + Socket.IO core + all REST routes
+│   ├── tasks.py                     # Celery tasks (pipeline, daily report)
+│   ├── celery_config.py             # Broker URL + beat schedule
+│   ├── pipeline_task.py             # TM/Last.fm helpers + pricing formula
+│   ├── generate_training_data.py    # Last.fm-based training set generator
+│   ├── train_model.py               # RF vs XGBoost trainer
+│   └── models/                      # Mount point for the shared models volume
 │
 ├── prediction_service/
 │   ├── Dockerfile
 │   ├── requirements.txt
-│   └── service.py
-│
-├── mongo-init/
-│   └── seed.js
+│   └── service.py                   # ML inference service + RabbitMQ consumer
 │
 ├── seed-tools/
 │   ├── Dockerfile
 │   ├── package.json
-│   └── seed.js
+│   └── seed.js                      # Clears stale data + creates MongoDB indexes
 │
 ├── prometheus/
 │   └── prometheus.yml
 │
 └── monitoring/
-    └── prometheus.yml           # Alternative scrape configuration
+    └── prometheus.yml               # Alternative scrape configuration
 ```
 
 ---
@@ -187,65 +226,49 @@ IPVO_projekt/
 
 | File | Purpose |
 |------|---------|
-| `docker-compose.yml` | Declarative orchestration of all eleven services on the shared `app-net` network, including build contexts, environment variables, Traefik labels, healthchecks and the named volumes (`mongo_`, `models`). |
-| `.env` | Holds `TICKETMASTER_API_KEY` and `LASTFM_API_KEY`. Loaded by Compose into the `backend`, `analytics_worker` and `prediction_service` containers. Excluded from version control via `.gitignore`. |
-| `.gitignore` | Excludes secrets, Python virtualenvs, IDE artefacts and Celery beat schedule files. |
+| `docker-compose.yml` | Declarative orchestration of all twelve services on the shared `app-net` network. Includes build contexts, environment variables, Traefik labels, `service_healthy` conditions for RabbitMQ and the named volumes (`mongo_`, `models`). |
+| `.env` | Holds `TICKETMASTER_API_KEY` and `LASTFM_API_KEY`. Required for the data pipeline. Excluded from version control. |
+| `.env.example` | Template showing which environment variables are needed. |
 
 ### Frontend (`frontend/`)
 
 | File | Purpose |
 |------|---------|
-| `Dockerfile` | Builds an NGINX image and mounts the static HTML/CSS as a read-only volume. |
 | `index.html` | Login screen — captures the username, calls `POST /api/users` and stores it in `localStorage`. |
-| `clubs.html` | Renders the list of clubs returned by `GET /api/clubs`. |
-| `events.html` | Renders all events for the selected club via `GET /api/clubs/<id>/events`. |
-| `buy-ticket.html` | Ticket-purchase flow that posts to `POST /api/users/<username>/buy-ticket/<event_id>`. |
-| `tables.html` | The real-time table grid. Opens a Socket.IO connection, subscribes to the `table_updated` event and re-renders on every update. Reads dynamic pricing from `GET /api/events/<id>/pricing` and shows a *high-demand* banner whenever `current_price` exceeds `base_price × 1.2`. |
-| `style.css` | Shared visual styling for all pages. |
+| `clubs.html` | Venue browser. Fetches dynamic venues from `GET /api/clubs` with optional `?city` / `?country` filters. Populates the country dropdown from `GET /api/cities`. Auto-polls every 10 seconds while the database is empty (pipeline still running), then renders venue cards automatically once data arrives. |
+| `events.html` | Event feed for a selected venue. Displays Ticketmaster event image, artist, date/time, city, country, dynamic price with a 🔥 high-demand badge, genre tag and a link to the original Ticketmaster page. |
+| `buy-ticket.html` | Ticket-purchase flow. Fetches full event detail from `GET /api/events/<id>` and renders: hero image, artist, venue/address, capacity, genre, days-until, Last.fm statistics, current vs base price block and a Ticketmaster link. |
+| `tables.html` | Real-time table grid. Opens a Socket.IO connection and re-renders on `table_updated` events. Shows a mini event summary (image, artist, venue, date) above the grid. Reads dynamic pricing from `GET /api/events/<id>/pricing` and shows a high-demand warning when `current_price > base_price × 1.2`. |
+| `style.css` | Shared styling including dark theme, card/grid layouts and all Phase 4 additions (event-card, hot-badge, genre-tag, filter-bar, event-summary, price-block, lastfm-block). |
 
 ### Backend (`backend/`)
 
 | File | Purpose |
 |------|---------|
-| `Dockerfile` | Python 3 base image plus the dependencies declared in `requirements.txt`. |
-| `requirements.txt` | Flask 3, Flask-SocketIO, gevent, pymongo, pika, redis, prometheus-client, celery, plus the Phase 4 additions: `pylast`, `xgboost`, `scikit-learn`, `pandas`, `numpy`, `joblib`, `requests`. |
-| `app.py` | The Flask + Socket.IO core. Defines all REST routes, the Prometheus middleware (`Counter`, `Histogram` and `/metrics`), the RabbitMQ producer (`publish_to_rabbitmq`), the consumer thread (`listen_to_rabbitmq` → Socket.IO emit), the Redis read-through cache for table lists, and the Phase 4 dynamic-pricing endpoints (`/api/events/<id>/pricing`, `/api/events/<id>/request-price-update`, `/api/price-log`, `/api/model-status`). |
-| `tasks.py` | Celery task definitions: `generate_daily_report` (aggregates reservations and tickets into the `reports` collection) and `run_data_pipeline` (Phase 4 — Ticketmaster fetch, Last.fm enrichment, deterministic upsert). |
-| `celery_config.py` | Celery broker URL (RabbitMQ), result backend and the periodic `beat_schedule` — daily report every sixty seconds and the data pipeline once per day. |
-| `pipeline_task.py` | Pure functions used by `run_data_pipeline`: `fetch_ticketmaster_events`, `get_lastfm_artist_data`, `encode_genre`, `compute_days_until_event` and the deterministic `calculate_base_price` formula. The same pricing function is duplicated in the training-data generator to guarantee identical inputs/outputs across the pipeline. |
-| `generate_training_data.py` | Builds the training set from real Last.fm artists. For each genre it fetches the top artists, retrieves their listeners/playcount/tags and emits one row per (artist × venue capacity × days-until-event) combination into `ml_training_data`. Fully deterministic — no random values, no synthetic data. |
-| `train_model.py` | Loads `ml_training_data`, engineers `log_listeners`/`log_playcount` features, performs an 80/20 train/test split, trains a Random Forest and an XGBoost regressor, compares RMSE, persists the winning model and its feature list to the shared `/app/models/` volume and inserts a metadata document into `model_metadata`. |
-| `models/` | Mount point for the shared `models` Docker volume — contains the serialised `pricing_model.pkl` and `feature_cols.pkl`. |
+| `app.py` | Flask + Socket.IO core. REST routes (see API Reference), Prometheus middleware, RabbitMQ producer/consumer, Redis caching, and a **startup bootstrap thread** that auto-queues `run_data_pipeline` if the events collection is empty. |
+| `tasks.py` | Celery tasks: `generate_daily_report` (daily aggregates) and `run_data_pipeline` (TM fetch → Last.fm enrichment → club upsert → event upsert → table creation → cache invalidation). |
+| `celery_config.py` | RabbitMQ broker URL, result backend, and the beat schedule (daily report every 60 s, data pipeline once per day). |
+| `pipeline_task.py` | Pure helper functions for the pipeline: `fetch_ticketmaster_events` (extracts image, address, genre, price ranges), `get_lastfm_artist_data`, `encode_genre`, `calculate_base_price` (deterministic pricing formula), `slugify` and time utilities. |
+| `generate_training_data.py` | Builds the ML training set. For each of 10 genres it fetches the top 30 artists from Last.fm, retrieves their full stats and emits one row per (artist × 10 capacity tiers × 11 days-until scenarios) into `ml_training_data`. Fully deterministic — up to ~33,000 records. |
+| `train_model.py` | Loads `ml_training_data`, applies `log10` transforms, performs 80/20 split, trains RandomForest and XGBoost, persists the winner to the shared volume and writes a `model_metadata` document. |
 
 ### Prediction Service (`prediction_service/`)
 
 | File | Purpose |
 |------|---------|
-| `Dockerfile` | Slim Python 3 image that installs the ML runtime and runs `service.py`. |
-| `requirements.txt` | Flask, xgboost, scikit-learn, joblib, pymongo, redis, pika, numpy, pandas. |
-| `service.py` | Loads the trained model on boot, exposes `POST /predict-price`, `GET /model-info` and `GET /health`, caches predictions in Redis (`price_prediction_<event_id>`, TTL 300 s) and runs a background thread that consumes `price_update_queue` from RabbitMQ. When a prediction differs from the current price by more than five euros it appends a row to `price_log` and updates `current_price` on the corresponding event. |
+| `service.py` | Loads the trained model on boot (degraded mode if missing). Exposes `POST /predict-price`, `GET /model-info` and `GET /health`. Caches predictions in Redis (TTL 300 s). Background daemon thread always runs consuming `price_update_queue` — if the model is absent it `NACK`s without requeue. Writes `price_log` and updates `current_price` whenever the predicted price moves by more than €5. |
 
-### Database Seeds
+### Seed (`seed-tools/`)
 
 | File | Purpose |
 |------|---------|
-| `mongo-init/seed.js` | Auto-runs on the first MongoDB boot (`/docker-entrypoint-initdb.d`). Inserts five real Croatian clubs, twenty-five events and four hundred tables. Fully deterministic — no `Faker`, no `Math.random()`. |
-| `seed-tools/Dockerfile` | Node.js 20 alpine image used by the `seed` Compose service. |
-| `seed-tools/package.json` | Declares the `mongodb` dependency for the manual reseed script. |
-| `seed-tools/seed.js` | Manual reseeder. Inserts a richer dataset — eight Croatian clubs, twelve real artists (Solomun, Black Coffee, Tale Of Us, Charlotte de Witte, Boris Brejcha, Dubioza Kolektiv, etc.), six events per club and twenty-five tables per event. |
+| `seed.js` | One-shot container. Clears all stale hardcoded data from `clubs`, `events`, `tables` and `reservations` collections, then creates optimised MongoDB indexes. Real data is populated by the Ticketmaster pipeline — this script does **not** insert any venues or events. |
 
 ### Monitoring
 
 | File | Purpose |
 |------|---------|
-| `prometheus/prometheus.yml` | Active scrape configuration (15-second interval) for the `prometheus`, `backend` and `traefik` jobs. |
-| `monitoring/prometheus.yml` | Alternative configuration kept for reference. |
-
-### Documentation
-
-| File | Purpose |
-|------|---------|
-| `README.md` | This document. |
+| `prometheus/prometheus.yml` | Active scrape config (15 s interval) for `backend` (`/metrics`) and Traefik (`:8082`). |
 
 ---
 
@@ -254,138 +277,161 @@ IPVO_projekt/
 Every service runs on the shared `app-net` Docker network.
 
 ### `traefik`
-Edge reverse proxy and load balancer. Listens on port 80 for application traffic and 8080 for the Traefik dashboard. Exposes its own metrics on port 8082. Routing rules and priorities are declared via Docker labels on each service.
+Edge reverse proxy and load balancer. Port 80 for traffic, 8080 for dashboard, 8082 for metrics. Routing rules are declared via Docker labels.
 
 ### `web1` / `web2`
-Two NGINX containers serving the static frontend. They share the same Traefik router and load-balancer service definition, so traffic is distributed in round-robin fashion.
+Two NGINX containers serving the static frontend in round-robin. No state — purely serve HTML/CSS/JS files from a read-only volume mount.
 
 ### `backend`
-The Flask + Socket.IO core. Its responsibilities are:
-- exposing the REST API under `/api/*`;
-- maintaining a persistent Socket.IO connection over `/socket.io/*` for real-time table updates;
-- acting as a **RabbitMQ producer** for the `table_events` fanout exchange (every reservation or cancellation publishes a message);
-- running a **RabbitMQ consumer thread** that re-broadcasts those events to connected Socket.IO clients;
-- acting as a **RabbitMQ producer** for the `price_update_queue` (Phase 4 — sends pricing-feature payloads to the prediction service);
-- reading through and invalidating Redis for the table list (`tables_list_<event_id>` key, one-hour TTL);
-- exposing Prometheus metrics on `/metrics` via custom `Counter` and `Histogram` instruments.
+Flask + Socket.IO core. Responsibilities:
+- REST API under `/api/*` (see HTTP API Reference)
+- Socket.IO real-time channel over `/socket.io/*`
+- RabbitMQ **producer** for the `table_events` fanout exchange (reservations/cancellations)
+- RabbitMQ **consumer thread** that re-broadcasts to Socket.IO clients
+- RabbitMQ **producer** for `price_update_queue` (async pricing requests)
+- Redis read-through cache for tables (`tables_list_<id>`, 1 h TTL) and event feeds
+- Prometheus `/metrics` endpoint
+- **Startup bootstrap thread**: queues `run_data_pipeline` via Celery if `events` is empty
 
 ### `analytics_worker`
-A second Python container running `celery -A tasks worker --beat` from the same backend image. It executes both scheduled jobs:
-- `generate_daily_report` — aggregates reservations and ticket counts into the `reports` collection;
-- `run_data_pipeline` — fetches Ticketmaster events for ten European capitals, enriches each with Last.fm artist data, computes the deterministic base price and upserts into MongoDB while invalidating the relevant Redis keys.
+Second Python container from the same backend image, running `celery -A tasks worker --beat`. Executes:
+- `generate_daily_report` — aggregates metrics into `reports`
+- `run_data_pipeline` — fetches 20 global cities from Ticketmaster, enriches with Last.fm, upserts clubs/events/tables into MongoDB, invalidates Redis
 
-### `prediction_service` *(Phase 4 microservice)*
-A dedicated Flask service that owns the ML model:
-- loads `pricing_model.pkl` and `feature_cols.pkl` from the shared `models` volume on boot;
-- exposes `POST /predict-price`, `GET /model-info` and `GET /health` (the first two are routed through Traefik);
-- caches predictions in Redis (`price_prediction_<event_id>`, TTL 300 s);
-- spawns a daemon thread that consumes `price_update_queue`, runs the model on each message, writes a row to `price_log` and updates `current_price` whenever the predicted price moves by more than five euros.
+### `prediction_service`
+Dedicated Flask microservice that owns the ML model:
+- Loads `pricing_model.pkl` and `feature_cols.pkl` from the shared `models` volume
+- `POST /predict-price`, `GET /model-info`, `GET /health`
+- Caches predictions in Redis (`price_prediction_<id>`, TTL 300 s)
+- Background daemon thread always consumes `price_update_queue`; NACKs without requeue if model is not yet trained
 
 ### `mongo`
-MongoDB 7 instance. The script `mongo-init/seed.js` auto-runs on the very first container start and seeds the `clubs`, `events`, `tables` and `reservations` collections with curated, deterministic real-world data.
+MongoDB 7. On first start, `mongo-init/` scripts run. The `seed` service then clears any stale data and creates indexes.
 
 ### `seed`
-A Node.js one-shot container that connects to MongoDB and writes a richer, fully deterministic dataset. Useful for re-seeding without recreating the Mongo volume.
+Node.js one-shot container. Clears old hardcoded collections, creates MongoDB indexes, exits. Runs after `mongo` is started.
 
 ### `rabbitmq`
-RabbitMQ 3.12 with the management plugin (UI on port 15672). Hosts:
-- the `table_events` fanout exchange (real-time reservation events);
-- the `price_update_queue` durable queue (asynchronous pricing requests from backend → prediction service).
+RabbitMQ 3.12 with management plugin. Hosts:
+- `table_events` fanout exchange (real-time reservation events)
+- `price_update_queue` durable queue (async pricing)
+
+A Docker healthcheck (`rabbitmq-diagnostics -q ping`) ensures dependent services wait until RabbitMQ is fully ready.
 
 ### `redis`
-Used as a cache in two places — for `GET /api/events/<id>/tables` responses (with explicit invalidation on every reservation or cancellation) and for prediction-service responses (keyed by `event_id`).
+In-memory cache for table lists, event feeds and prediction-service responses.
 
 ### `prometheus`
-Scrapes metrics every fifteen seconds from itself, the backend (`/metrics`) and Traefik (`:8082`).
+Scrapes metrics every 15 s from the backend and Traefik.
 
 ### `grafana`
-Visualises Prometheus metrics. Reachable on port 3000 with `admin` / `admin` as the default credentials.
+Visualises Prometheus metrics. Port 3000, credentials `admin` / `admin`.
 
 ---
 
 ## MongoDB Collections
 
-| Collection | Owner | Purpose |
-|------------|-------|---------|
-| `clubs` | seed | Static catalogue of nightclubs |
-| `events` | seed + pipeline | Curated and Ticketmaster-imported events; Phase 4 enriches each document with `artist_listeners`, `artist_playcount`, `artist_tags`, `genre_encoded`, `base_price`, `current_price`, `min_price` and `max_price` |
-| `tables` | seed | Reservable tables per event |
-| `reservations` | backend | Audit log of every booked table |
-| `users` / `tickets` | backend | Username login and per-event ticket ownership |
-| `reports` | celery | Daily aggregate snapshots produced by `generate_daily_report` |
-| `ml_training_data` | generator | Training rows produced from real Last.fm artists × capacity × days-until scenarios |
-| `price_log` | prediction_service | Append-only log of every ML-driven price change |
-| `model_metadata` | trainer | Latest model name, RMSE values, train-set size, feature list |
+| Collection | Populated by | Purpose |
+|------------|-------------|---------|
+| `clubs` | `run_data_pipeline` | One document per Ticketmaster venue; keyed by `id = "tm-<venue_id>"`. Fields: name, city, country, address, capacity, lat/lon. |
+| `events` | `run_data_pipeline` | One document per TM event. Linked to its venue via `club_id`. Fields include: `ticketmaster_id`, `artist_name`, `image_url`, `event_date`, `url`, `artist_listeners`, `artist_playcount`, `genre_encoded`, `base_price`, `current_price`, `venue_capacity`, `days_until_event`. |
+| `tables` | `run_data_pipeline` | 20 free tables per event, created on first pipeline run. Linked by `event_id` (= `ticketmaster_id`). |
+| `reservations` | `backend` | Append-only audit log of every table reservation. |
+| `users` | `backend` | Username registry. |
+| `tickets` | `backend` | Per-user, per-event ticket ownership. |
+| `reports` | `analytics_worker` | Daily aggregate snapshots (reservation + ticket counts). |
+| `ml_training_data` | `generate_training_data.py` | Training rows: real Last.fm artists × 10 capacity tiers × 11 days-until scenarios. |
+| `price_log` | `prediction_service` | Append-only log of every ML-driven price change (old price → new price). |
+| `model_metadata` | `train_model.py` | Latest model name, RF RMSE, XGBoost RMSE, feature list, training set size, timestamp. |
 
 ---
 
 ## HTTP API Reference
 
-### Backend (routed through Traefik)
+### Backend (routed through Traefik on port 80)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET    | `/api/clubs` | List all clubs |
-| POST   | `/api/clubs` | Insert a club |
-| GET    | `/api/clubs/<club_id>/events` | Events for a given club |
-| GET    | `/api/events/<event_id>/tables` | Tables for an event (Redis-cached) |
-| POST   | `/api/events/<event_id>/tables/<table_id>/reserve` | Reserve a table (publishes to RabbitMQ, invalidates cache) |
-| POST   | `/api/events/<event_id>/tables/<table_id>/cancel` | Cancel a reservation |
-| POST   | `/api/users` | Create a user |
-| POST   | `/api/users/<username>/buy-ticket/<event_id>` | Purchase a ticket |
-| GET    | `/api/users/<username>/has-ticket/<event_id>` | Ticket-ownership check |
-| GET    | `/api/reports` | Most recent ten daily reports |
-| GET    | `/api/events/<event_id>/pricing` | Current, base, minimum and maximum price for an event |
-| POST   | `/api/events/<event_id>/request-price-update` | Manually trigger a price-update message via RabbitMQ |
-| GET    | `/api/price-log` | Last fifty pricing changes |
-| GET    | `/api/model-status` | Proxy to the prediction service’s `/model-info` |
-| GET    | `/metrics` | Prometheus metrics scrape endpoint |
+| GET | `/api/clubs` | List venues. Optional filters: `?city=`, `?country=`. Returns `event_count` per venue via a single `$lookup` aggregation. |
+| POST | `/api/clubs` | Insert a club document manually. |
+| GET | `/api/clubs/<club_id>/events` | Events for a venue, sorted by date ascending. |
+| GET | `/api/events` | Global event feed. Filters: `?city=`, `?country=`, `?genre=`, `?q=` (full-text), `?limit=` (default 100, max 500). Redis-cached for 60 s. |
+| GET | `/api/events/<event_id>` | Full event document by `id` or `ticketmaster_id`. |
+| GET | `/api/cities` | Aggregated list of cities + event counts (for filter dropdowns). |
+| POST | `/api/sync-events` | Manually queue `run_data_pipeline` via Celery. Returns `task_id`. |
+| GET | `/api/events/<event_id>/tables` | Tables for an event (Redis-cached, 1 h TTL). |
+| POST | `/api/events/<event_id>/tables/<table_id>/reserve` | Reserve a table (RabbitMQ broadcast + cache invalidation). |
+| POST | `/api/events/<event_id>/tables/<table_id>/cancel` | Cancel a reservation. |
+| POST | `/api/users` | Create / ensure a user. |
+| POST | `/api/users/<username>/buy-ticket/<event_id>` | Purchase a ticket. |
+| GET | `/api/users/<username>/has-ticket/<event_id>` | Ticket ownership check. |
+| GET | `/api/reports` | Most recent 10 daily reports. |
+| GET | `/api/events/<event_id>/pricing` | `{base_price, current_price, high_demand, ...}`. Redis-cached for 60 s. |
+| POST | `/api/events/<event_id>/request-price-update` | Manually send pricing features to the prediction queue. |
+| GET | `/api/price-log` | Last 50 ML-driven price changes. |
+| GET | `/api/model-status` | Proxy to `prediction_service /model-info`. |
+| GET | `/metrics` | Prometheus scrape endpoint. |
 
-### Prediction Service (also routed through Traefik)
+### Prediction Service (routed through Traefik on port 80)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST   | `/predict-price` | Returns a model-predicted price for the given feature payload |
-| GET    | `/model-info` | Latest model metadata from MongoDB |
-| GET    | `/health` | Liveness probe |
+| POST | `/predict-price` | Input: `{artist_listeners, artist_playcount, genre_encoded, venue_capacity, days_until_event, tickets_sold_ratio, day_of_week, event_id, current_price}`. Returns predicted price; updates `price_log` and event if delta > €5. |
+| GET | `/model-info` | Latest `model_metadata` document. |
+| GET | `/health` | `{"status": "ok", "model_loaded": true/false}`. |
 
 ### Real-Time Channel
 
-The Socket.IO event `table_updated` is broadcast to every connected client whenever a reservation or cancellation flows through the `table_events` exchange.
+Socket.IO event `table_updated` is broadcast to **all** connected clients whenever a reservation or cancellation flows through the `table_events` exchange. The frontend filters by `event_id` client-side.
 
 ---
 
 ## Quick Start
 
-> **Prerequisites:** Docker and Docker Compose. For Phase 4 live data, place `TICKETMASTER_API_KEY` and `LASTFM_API_KEY` in a `.env` file at the repository root. Without them the pipeline silently skips remote calls.
+> **Prerequisites:** Docker and Docker Compose installed. API keys in a `.env` file at the repository root (copy from `.env.example`).
 
 ```bash
-# 1. Build and start the entire stack
+# 1. Add your API keys
+cp .env.example .env
+# Edit .env and fill in TICKETMASTER_API_KEY and LASTFM_API_KEY
+
+# 2. Build and start the entire stack
 docker compose build
 docker compose up -d
 
-# 2. (Optional) Reseed MongoDB with the richer Node.js dataset
-docker compose run --rm seed
+# 3. Watch the pipeline run automatically
+docker compose logs analytics_worker -f --tail=60
+# You will see: "Obrada grada: London, GB", "Pipeline gotov: {...}"
+# clubs.html auto-polls and populates once events arrive (~2–5 min)
 
-# 3. (Phase 4) Run the data pipeline once on demand
-docker compose exec analytics_worker celery -A tasks call tasks.run_data_pipeline
+# --- ML model (optional, for dynamic pricing) ---
 
-# 4. (Phase 4) Generate the training dataset from Last.fm
+# 4. Generate the training dataset (~30 min, hits Last.fm API)
 docker compose exec backend python generate_training_data.py
 
-# 5. (Phase 4) Train the model — the lower-RMSE estimator wins
+# 5. Train the model (RF vs XGBoost, picks lower RMSE)
 docker compose exec backend python train_model.py
 
-# 6. Reload the model into the prediction service
+# 6. Reload the prediction service so it picks up the new model
 docker compose restart prediction_service
+
+# --- Utilities ---
+
+# Manually re-trigger the data pipeline (e.g. after API key change)
+docker compose exec analytics_worker celery -A tasks call tasks.run_data_pipeline
+
+# Re-run seed (clears old data, recreates indexes)
+docker compose run --rm seed
 ```
 
-Endpoints:
+### Endpoints
 
 | URL | What you get |
 |-----|--------------|
-| http://localhost/ | Frontend (login → clubs → events → tables) |
-| http://localhost/api/model-status | Latest model metadata |
+| http://localhost/ | Frontend (login → venues → events → tables) |
+| http://localhost/api/events | Global event feed (JSON) |
+| http://localhost/api/cities | City + event count aggregation (JSON) |
+| http://localhost/api/model-status | Latest ML model metadata |
 | http://localhost/metrics | Prometheus metrics from the backend |
 | http://localhost:8080/ | Traefik dashboard |
 | http://localhost:15672/ | RabbitMQ Management UI (`guest` / `guest`) |
@@ -396,9 +442,22 @@ Endpoints:
 
 ## Observability
 
-The Flask backend records two custom metrics through `prometheus_client`:
+The Flask backend records two custom metrics via `prometheus_client`:
 
 - `http_requests_total{method, endpoint, status}` — request counter.
 - `http_request_duration_seconds{endpoint}` — latency histogram.
 
-Traefik exports its own request metrics on the dedicated `metrics` entry point (port 8082). Both are scraped by Prometheus every fifteen seconds and visualised in Grafana, providing end-to-end visibility from the edge proxy down to individual API endpoints.
+Traefik exports its own request metrics on the `metrics` entry point (port 8082). Both are scraped by Prometheus every 15 seconds and visualised in Grafana, providing end-to-end visibility from the edge proxy down to individual API endpoints.
+
+---
+
+## Known Limitations & Future Work
+
+See `task.md` for the full list of open tasks and improvement recommendations. Key items:
+
+- No authentication/authorisation — `username` is stored unverified in `localStorage`
+- No input validation on POST endpoints
+- No rate limiting — API is open to abuse
+- WebSocket broadcasts go to all clients (not room-scoped by event)
+- `generate_training_data.py` drops the collection without confirmation prompt
+- ML model has no versioning — each retrain overwrites the previous `.pkl`

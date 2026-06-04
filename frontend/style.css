@@ -401,3 +401,303 @@ h2 {
     font-weight: bold;
     cursor: pointer;
 }
+
+/* =========================================
+   GLOBAL EVENTS – FILTER BAR
+   ========================================= */
+.filter-bar {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-bottom: 20px;
+    padding: 16px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+}
+
+.filter-bar input,
+.filter-bar select {
+    padding: 10px 12px;
+    background: #0d1117;
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    color: white;
+    font-size: 14px;
+    min-width: 180px;
+}
+
+.filter-bar input:focus,
+.filter-bar select:focus {
+    outline: none;
+    border-color: var(--color-primary);
+}
+
+.filter-bar .buy-btn {
+    width: auto;
+    margin: 0;
+    padding: 10px 18px;
+    font-size: 14px;
+}
+
+.stats-text {
+    color: var(--color-text-muted);
+    font-size: 14px;
+    margin: 8px 0 18px 0;
+}
+
+.sync-status {
+    background: rgba(37, 99, 235, 0.1);
+    border-left: 4px solid var(--color-primary);
+    padding: 12px 16px;
+    border-radius: 6px;
+    color: #cbd5e1;
+    margin-bottom: 16px;
+    font-size: 14px;
+}
+
+.loading-state {
+    text-align: center;
+    padding: 40px 20px;
+    color: var(--color-text-muted);
+}
+
+.card-badge {
+    display: inline-block;
+    padding: 4px 10px;
+    background: rgba(37, 99, 235, 0.15);
+    color: #93c5fd;
+    border-radius: 999px;
+    font-size: 12px;
+    margin-bottom: 12px;
+    font-weight: 600;
+}
+
+/* =========================================
+   EVENT CARDS (GLOBAL)
+   ========================================= */
+.event-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 24px;
+}
+
+.event-card {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 12px;
+    overflow: hidden;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    flex-direction: column;
+}
+
+.event-card:hover {
+    transform: translateY(-4px);
+    border-color: var(--color-primary);
+    box-shadow: 0 12px 24px rgba(37, 99, 235, 0.2);
+}
+
+.event-image {
+    width: 100%;
+    height: 180px;
+    object-fit: cover;
+    display: block;
+    background: #0d1117;
+}
+
+.event-body {
+    padding: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.event-price {
+    margin-top: 6px;
+    color: #f3f4f6;
+    font-size: 16px;
+}
+
+.hot-badge {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 3px 10px;
+    background: rgba(239, 68, 68, 0.15);
+    color: #fca5a5;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.genre-tag {
+    display: inline-block;
+    padding: 3px 10px;
+    background: rgba(16, 185, 129, 0.15);
+    color: #6ee7b7;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+    align-self: flex-start;
+}
+
+.tm-link {
+    color: #93c5fd;
+    text-decoration: none;
+    font-size: 13px;
+    margin-top: 4px;
+}
+
+.tm-link:hover {
+    text-decoration: underline;
+}
+
+.tm-link.big {
+    display: inline-block;
+    margin-top: 16px;
+    padding: 10px 16px;
+    background: rgba(37, 99, 235, 0.15);
+    border-radius: 8px;
+    font-size: 14px;
+}
+
+/* =========================================
+   EVENT DETAIL (BUY-TICKET)
+   ========================================= */
+.event-detail {
+    text-align: left;
+}
+
+.event-hero {
+    width: 100%;
+    max-height: 320px;
+    object-fit: cover;
+    border-radius: 10px;
+    margin-bottom: 18px;
+    background: #0d1117;
+}
+
+.event-headline {
+    margin: 0 0 16px 0;
+    font-size: 24px;
+    color: #f3f4f6;
+}
+
+.detail-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(55, 65, 81, 0.5);
+    font-size: 14px;
+}
+
+.detail-row span {
+    color: var(--color-text-muted);
+}
+
+.detail-row strong {
+    color: #f3f4f6;
+    text-align: right;
+}
+
+.lastfm-block {
+    margin-top: 16px;
+    padding: 12px 14px;
+    background: rgba(220, 38, 127, 0.1);
+    border-left: 3px solid #db2777;
+    border-radius: 6px;
+    color: #fbcfe8;
+    font-size: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.price-block {
+    margin-top: 16px;
+    padding: 14px 16px;
+    background: rgba(16, 185, 129, 0.08);
+    border-left: 3px solid var(--color-success);
+    border-radius: 6px;
+}
+
+.price-line {
+    display: flex;
+    justify-content: space-between;
+    font-size: 15px;
+    color: #f3f4f6;
+    padding: 4px 0;
+}
+
+.price-line.muted {
+    color: var(--color-text-muted);
+    font-size: 13px;
+}
+
+.event-info {
+    margin-top: 16px;
+    padding: 12px;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 6px;
+    color: #d1d5db;
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+.muted {
+    color: var(--color-text-muted);
+    font-size: 13px;
+}
+
+/* =========================================
+   TABLES PAGE – EVENT SUMMARY + PRICING
+   ========================================= */
+.event-summary {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    margin-bottom: 20px;
+    padding: 14px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+}
+
+.summary-img {
+    width: 96px;
+    height: 96px;
+    object-fit: cover;
+    border-radius: 8px;
+    flex-shrink: 0;
+    background: #0d1117;
+}
+
+.summary-text {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.summary-title {
+    font-weight: 700;
+    font-size: 18px;
+    color: #f3f4f6;
+}
+
+.summary-sub {
+    color: var(--color-text-muted);
+    font-size: 13px;
+}
+
+.pricing-banner {
+    margin: 15px 0;
+    padding: 12px 16px;
+    background: rgba(37, 99, 235, 0.1);
+    border-left: 4px solid var(--color-primary);
+    border-radius: 8px;
+    color: #f3f4f6;
+}
+

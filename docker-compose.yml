@@ -58,8 +58,12 @@ services:
       - TICKETMASTER_API_KEY=${TICKETMASTER_API_KEY:-}
       - LASTFM_API_KEY=${LASTFM_API_KEY:-}
     depends_on:
-      - mongo
-      - rabbitmq
+      mongo:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     labels:
       - "traefik.enable=true"
       # Hvatamo API, WebSocket i /metrics promet
@@ -90,8 +94,12 @@ services:
       - TICKETMASTER_API_KEY=${TICKETMASTER_API_KEY:-}
       - LASTFM_API_KEY=${LASTFM_API_KEY:-}
     depends_on:
-      - mongo
-      - rabbitmq
+      mongo:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     networks:
       - app-net
 
@@ -104,9 +112,12 @@ services:
       - MONGO_URI=mongodb://mongo:27017
       - RABBITMQ_URI=amqp://guest:guest@rabbitmq:5672/
     depends_on:
-      - mongo
-      - rabbitmq
-      - redis
+      mongo:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     labels:
       - "traefik.enable=true"
       - 'traefik.http.routers.predict.rule=Host("localhost") && (PathPrefix("/predict-price") || PathPrefix("/model-info"))'
@@ -124,15 +135,11 @@ services:
       - "27017:27017"
     volumes:
      - mongo_:/data/db
-     - ./mongo-init:/docker-entrypoint-initdb.d:ro
-    networks:
-      - app-net
-
-  seed:
-    build:
-      context: ./seed-tools
-    depends_on:
-      - mongo
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - app-net
 
@@ -159,6 +166,11 @@ services:
     container_name: redis
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - app-net
 

@@ -19,10 +19,12 @@
         
         <div id="loading" style="text-align: center; margin-top: 20px;">Učitavanje...</div>
 
-        <div id="pricing-info" class="pricing-banner hidden" style="margin: 15px 0; padding: 12px 16px; background: #f4f4f8; border-left: 4px solid #5b8def; border-radius: 6px;">
+        <div id="event-summary" class="event-summary hidden"></div>
+
+        <div id="pricing-info" class="pricing-banner hidden">
             <span id="current-price" style="font-weight: 600;">Cijena: --</span>
-            <span id="price-warning" class="hidden warning-badge" style="margin-left: 12px; padding: 4px 10px; background: #fff3cd; color: #856404; border-radius: 4px; font-size: 13px;">
-                ⚠️ Visoka potražnja – cijena bi uskoro mogla porasti
+            <span id="price-warning" class="hidden hot-badge" style="margin-left: 12px;">
+                🔥 Visoka potražnja – cijena bi uskoro mogla porasti
             </span>
         </div>
 
@@ -85,12 +87,30 @@
         // KLJUČNO: Ime eventa mora biti 'table_updated' (kao u Python backendu)
         socket.on('table_updated', (message) => {
             console.log("Stiglo RabbitMQ/Socket ažuriranje:", message);
-            
+
             // Ako se ažuriranje tiče ovog eventa, osvježi prikaz
-            // (message.event_id dolazi kao string ili int, pa koristimo labavu usporedbu == za svaki slučaj)
             if (message.event_id == eventId) {
                 console.log("Osvježavam tablicu...");
-                loadTables(); 
+                loadTables();
+            }
+        });
+
+        // Pricing updates u realnom vremenu (ML model promijenio cijenu)
+        socket.on('price_updated', (data) => {
+            if (data.event_id == eventId) {
+                console.log("Stigla nova cijena:", data);
+                const currentPrice = Number(data.current_price);
+                if (!isNaN(currentPrice)) {
+                    document.getElementById('pricing-info').classList.remove('hidden');
+                    document.getElementById('current-price').textContent =
+                        `Cijena rezervacije: ${currentPrice.toFixed(2)} EUR`;
+                }
+                const warning = document.getElementById('price-warning');
+                if (data.high_demand) {
+                    warning.classList.remove('hidden');
+                } else {
+                    warning.classList.add('hidden');
+                }
             }
         });
 
@@ -128,13 +148,48 @@
                 // Ako nema kartu, prikaži poruku i gumb za kupnju
                 document.getElementById('noAccess').classList.remove('hidden');
                 document.getElementById('buyBtn').onclick = () => {
-                    window.location.href = `/buy-ticket.html?event_id=${eventId}&event_name=${encodeURIComponent(eventName)}`;
+                    window.location.href = `/buy-ticket.html?event_id=${encodeURIComponent(eventId)}&event_name=${encodeURIComponent(eventName)}`;
                 };
             } else {
                 // Ako ima kartu, učitaj stolove i prikaži grid
                 document.getElementById('tables').style.display = 'grid';
+                loadEventSummary();
                 loadTables();
                 loadEventPricing();
+            }
+        }
+
+        async function loadEventSummary() {
+            try {
+                const res = await fetch(`/api/events/${encodeURIComponent(eventId)}`);
+                if (!res.ok) return;
+                const ev = await res.json();
+                const summary = document.getElementById('event-summary');
+                const dt = ev.event_date || ev.date;
+                let dateStr = 'Datum: nepoznat';
+                if (dt) {
+                    try {
+                        const d = new Date(dt);
+                        if (!isNaN(d.getTime())) {
+                            dateStr = d.toLocaleString('hr-HR', {
+                                weekday: 'short', day: '2-digit', month: 'short',
+                                hour: '2-digit', minute: '2-digit',
+                            });
+                        }
+                    } catch {}
+                }
+                summary.innerHTML = `
+                    ${ev.image_url ? `<img src="${ev.image_url}" alt="" class="summary-img"/>` : ''}
+                    <div class="summary-text">
+                        <div class="summary-title">${ev.name || eventName}</div>
+                        <div class="summary-sub">🎤 ${ev.artist_name || ''}</div>
+                        <div class="summary-sub">📍 ${[ev.venue_name, ev.city, ev.country].filter(Boolean).join(', ')}</div>
+                        <div class="summary-sub">📅 ${dateStr}</div>
+                    </div>
+                `;
+                summary.classList.remove('hidden');
+            } catch (err) {
+                console.warn('Event summary fetch failed', err);
             }
         }
 
@@ -232,11 +287,10 @@
         }
 
         function reserveTable(tableId) {
-            // Šaljemo zahtjev. NE zovemo loadTables() ručno ovdje.
-            // Čekamo da Backend -> RabbitMQ -> Socket.IO javi da je gotovo.
-            // Tako dokazujemo da sustav radi u realnom vremenu.
             fetch(`/api/events/${eventId}/tables/${tableId}/reserve`, {
-                method: 'POST'
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: username })
             })
             .then(r => r.json())
             .then(data => {
@@ -249,7 +303,9 @@
 
         function cancelTable(tableId) {
             fetch(`/api/events/${eventId}/tables/${tableId}/cancel`, {
-                method: 'POST'
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: username })
             })
             .then(r => r.json())
             .then(data => {

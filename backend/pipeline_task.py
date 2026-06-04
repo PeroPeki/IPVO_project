@@ -1,12 +1,15 @@
 """
-Data Pipeline – Faza 4
-- Dohvat stvarnih glazbenih evenata s Ticketmaster Discovery API-ja
+Data Pipeline – Faza 4 (Global)
+- Dohvat stvarnih glazbenih evenata s Ticketmaster Discovery API-ja za globalne gradove
 - Obogaćivanje podataka putem Last.fm API-ja (listeners, playcount, tags)
 - Deterministička formula za izračun bazne cijene stola
 """
 
 import os
 import math
+import re
+import time
+import unicodedata
 from datetime import datetime, timedelta, timezone
 
 import requests
@@ -16,12 +19,23 @@ import pylast
 TICKETMASTER_KEY = os.environ.get("TICKETMASTER_API_KEY")
 LASTFM_KEY = os.environ.get("LASTFM_API_KEY")
 
+# Globalna pokrivenost – Europa, Sjeverna Amerika, Australija.
+# Ticketmaster Discovery API ima najjaču pokrivenost u tim regijama.
 TARGET_CITIES = [
-    ("London", "GB"), ("Berlin", "DE"), ("Amsterdam", "NL"),
-    ("Barcelona", "ES"), ("Paris", "FR"), ("Milan", "IT"),
-    ("Vienna", "AT"), ("Prague", "CZ"), ("Budapest", "HU"),
-    ("Zagreb", "HR")
+    # Europa
+    ("Zagreb", "HR"), ("London", "GB"), ("Berlin", "DE"),
+    ("Amsterdam", "NL"), ("Barcelona", "ES"), ("Paris", "FR"),
+    ("Madrid", "ES"), ("Milan", "IT"), ("Vienna", "AT"),
+    ("Prague", "CZ"),
+    # Sjeverna Amerika
+    ("New York", "US"), ("Los Angeles", "US"), ("Chicago", "US"),
+    ("Miami", "US"), ("Las Vegas", "US"), ("Boston", "US"),
+    ("Atlanta", "US"), ("Toronto", "CA"),
+    # Australija
+    ("Sydney", "AU"), ("Melbourne", "AU"),
 ]
+
+DEFAULT_VENUE_CAPACITY = 1000
 
 GENRE_MAP = {
     "electronic": 1, "techno": 2, "house": 3, "trance": 4,
@@ -31,78 +45,177 @@ GENRE_MAP = {
 }
 
 
-def fetch_ticketmaster_events(city, country_code):
-    """Dohvaća glazbene evente za zadani grad u idućih 90 dana."""
+def slugify(text):
+    """ASCII-safe slug za korištenje kao stabilan id (npr. club_id)."""
+    if not text:
+        return "unknown"
+    text = unicodedata.normalize("NFKD", text)
+    text = text.encode("ascii", "ignore").decode("ascii").lower()
+    text = re.sub(r"[^a-z0-9]+", "-", text).strip("-")
+    return text or "unknown"
+
+
+def _pick_best_image(images):
+    """Iz Ticketmaster `images` polja vraća najveću sliku (ili None)."""
+    if not images:
+        return None
+    sorted_imgs = sorted(
+        images,
+        key=lambda x: (x.get("width") or 0) * (x.get("height") or 0),
+        reverse=True,
+    )
+    return sorted_imgs[0].get("url") if sorted_imgs else None
+
+
+def _extract_price_range(event):
+    """Iz `priceRanges` polja vraća min/max cijenu (ili None)."""
+    price_ranges = event.get("priceRanges") or []
+    if not price_ranges:
+        return None, None
+    pr = price_ranges[0]
+    return pr.get("min"), pr.get("max")
+
+
+def _extract_genre_from_classifications(event):
+    """Pokušaj izvući žanr iz `classifications` polja (TM segment/genre)."""
+    classifications = event.get("classifications") or []
+    if not classifications:
+        return None
+    c = classifications[0]
+    parts = []
+    for key in ("genre", "subGenre", "segment"):
+        node = c.get(key)
+        if node and node.get("name") and node["name"].lower() != "undefined":
+            parts.append(node["name"])
+    return ", ".join(parts) if parts else None
+
+
+def _parse_events(raw_events, city, country_code):
+    """Parsira sirove TM evente u našu strukturu."""
+    parsed = []
+    for event in raw_events:
+        try:
+            attractions = event.get("_embedded", {}).get("attractions", []) or []
+            artist_name = attractions[0]["name"] if attractions else event.get("name", "Unknown")
+
+            venues = event.get("_embedded", {}).get("venues", []) or []
+            venue = venues[0] if venues else {}
+            venue_id = venue.get("id")
+            venue_name = venue.get("name", "Unknown")
+            venue_capacity = venue.get("capacity")
+            venue_city = (venue.get("city") or {}).get("name") or city
+            venue_country = (venue.get("country") or {}).get("countryCode") or country_code
+            venue_country_name = (venue.get("country") or {}).get("name")
+            venue_address = (venue.get("address") or {}).get("line1")
+            venue_postal = venue.get("postalCode")
+            venue_url = venue.get("url")
+            venue_lat = (venue.get("location") or {}).get("latitude")
+            venue_lon = (venue.get("location") or {}).get("longitude")
+
+            event_date_str = event.get("dates", {}).get("start", {}).get("dateTime")
+            event_date_local = event.get("dates", {}).get("start", {}).get("localDate")
+            event_time_local = event.get("dates", {}).get("start", {}).get("localTime")
+            try:
+                event_date = (
+                    datetime.fromisoformat(event_date_str.replace("Z", "+00:00"))
+                    if event_date_str else None
+                )
+            except Exception:
+                event_date = None
+
+            tm_min, tm_max = _extract_price_range(event)
+            tm_genre = _extract_genre_from_classifications(event)
+            image_url = _pick_best_image(event.get("images"))
+            info = event.get("info") or event.get("pleaseNote") or ""
+
+            parsed.append({
+                "ticketmaster_id": event.get("id"),
+                "name": event.get("name"),
+                "artist_name": artist_name,
+                "city": venue_city,
+                "country": venue_country,
+                "country_name": venue_country_name,
+                "venue_id": venue_id,
+                "venue_name": venue_name,
+                "venue_capacity": venue_capacity,
+                "venue_address": venue_address,
+                "venue_postal_code": venue_postal,
+                "venue_url": venue_url,
+                "venue_latitude": venue_lat,
+                "venue_longitude": venue_lon,
+                "event_date": event_date,
+                "event_date_local": event_date_local,
+                "event_time_local": event_time_local,
+                "url": event.get("url"),
+                "image_url": image_url,
+                "info": info,
+                "tm_genre": tm_genre,
+                "tm_min_price": tm_min,
+                "tm_max_price": tm_max,
+            })
+        except Exception as exc:
+            print(f"Greška pri parsiranju eventa: {exc}")
+            continue
+    return parsed
+
+
+def fetch_ticketmaster_events(city, country_code, max_pages=3):
+    """Dohvaća glazbene evente za zadani grad u idućih 90 dana — s paginacijom (do 60 eventa)."""
     if not TICKETMASTER_KEY:
         print("TICKETMASTER_API_KEY nije postavljen – preskačem dohvat.")
         return []
 
     url = "https://app.ticketmaster.com/discovery/v2/events.json"
-    params = {
-        "apikey": TICKETMASTER_KEY,
-        "city": city,
-        "countryCode": country_code,
-        "classificationName": "music",
-        "size": 20,
-        "sort": "date,asc",
-        "startDateTime": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "endDateTime": (datetime.utcnow() + timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    }
+    all_events = []
 
-    try:
-        response = requests.get(url, params=params, timeout=10)
-    except requests.RequestException as exc:
-        print(f"Ticketmaster mrežna greška za {city}: {exc}")
-        return []
+    for page in range(max_pages):
+        params = {
+            "apikey": TICKETMASTER_KEY,
+            "city": city,
+            "countryCode": country_code,
+            "classificationName": "music",
+            "size": 20,
+            "page": page,
+            "sort": "date,asc",
+            "startDateTime": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "endDateTime": (datetime.utcnow() + timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
 
-    if response.status_code != 200:
-        print(f"Ticketmaster greška za {city}: {response.status_code}")
-        return []
-
-    data = response.json()
-    if "_embedded" not in data or "events" not in data["_embedded"]:
-        return []
-
-    events = []
-    for event in data["_embedded"]["events"]:
         try:
-            attractions = event.get("_embedded", {}).get("attractions", [])
-            artist_name = attractions[0]["name"] if attractions else event.get("name", "Unknown")
+            response = requests.get(url, params=params, timeout=15)
+        except requests.RequestException as exc:
+            print(f"Ticketmaster mrežna greška za {city} stranica {page}: {exc}")
+            break
 
-            venues = event.get("_embedded", {}).get("venues", [])
-            venue_name = venues[0].get("name", "Unknown") if venues else "Unknown"
-            venue_capacity = venues[0].get("capacity") if venues else None
-
-            event_date_str = event.get("dates", {}).get("start", {}).get("dateTime")
-            event_date = (
-                datetime.fromisoformat(event_date_str.replace("Z", "+00:00"))
-                if event_date_str else None
+        if response.status_code != 200:
+            print(
+                f"Ticketmaster greška za {city} stranica {page}: "
+                f"{response.status_code} – {response.text[:200]}"
             )
+            break
 
-            events.append({
-                "ticketmaster_id": event.get("id"),
-                "name": event.get("name"),
-                "artist_name": artist_name,
-                "city": city,
-                "country": country_code,
-                "venue_name": venue_name,
-                "venue_capacity": venue_capacity,
-                "event_date": event_date,
-                "url": event.get("url"),
-            })
-        except Exception as exc:
-            print(f"Greška pri parsiranju eventa: {exc}")
-            continue
+        data = response.json()
+        if "_embedded" not in data or "events" not in data["_embedded"]:
+            break
 
-    return events
+        all_events.extend(_parse_events(data["_embedded"]["events"], city, country_code))
+
+        total_pages = data.get("page", {}).get("totalPages", 1)
+        if page + 1 >= total_pages:
+            break
+
+        time.sleep(0.5)
+
+    return all_events
 
 
-def get_lastfm_artist_data(artist_name):
-    """Obogaćuje izvođača podacima s Last.fm API-ja."""
+def get_lastfm_artist_data(artist_name, network=None):
+    """Obogaćuje izvođača podacima s Last.fm API-ja. Network se može proslijediti za reuse."""
     if not LASTFM_KEY:
         return {"artist_listeners": 0, "artist_playcount": 0, "artist_tags": []}
     try:
-        network = pylast.LastFMNetwork(api_key=LASTFM_KEY)
+        if network is None:
+            network = pylast.LastFMNetwork(api_key=LASTFM_KEY)
         artist = network.get_artist(artist_name)
         playcount = int(artist.get_playcount() or 0)
         listeners = int(artist.get_listener_count() or 0)
@@ -162,3 +275,22 @@ def compute_days_until_event(event_date):
         return 30
     now = datetime.now(timezone.utc) if event_date.tzinfo else datetime.utcnow()
     return max(0, (event_date - now).days)
+
+
+def compute_day_of_week(event_date):
+    """Vraća dan u tjednu (0=ponedjeljak ... 6=nedjelja)."""
+    if not event_date:
+        return datetime.utcnow().weekday()
+    return event_date.weekday()
+
+
+def compute_default_tickets_sold_ratio(days_until_event):
+    """
+    Deterministički udio rasprodanosti ovisno o blizini eventa.
+    Mora biti identičan onome u generate_training_data.py.
+    """
+    if days_until_event <= 7:
+        return 0.85
+    if days_until_event <= 30:
+        return 0.60
+    return 0.30

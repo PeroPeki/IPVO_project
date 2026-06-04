@@ -6,7 +6,6 @@ Pricing Training Data Generator
 """
 
 import os
-import math
 import time
 from datetime import datetime
 
@@ -14,18 +13,14 @@ import requests
 import pylast
 from pymongo import MongoClient
 
+# Importaj formulu i mapu iz pipeline_task da nema dupliciranja
+from pipeline_task import calculate_base_price, GENRE_MAP
+
 
 LASTFM_KEY = os.environ.get("LASTFM_API_KEY")
 
 VENUE_CAPACITY_TIERS = [200, 300, 400, 500, 750, 1000, 1500, 2000, 3000, 5000]
 DAYS_UNTIL_EVENT_SCENARIOS = [1, 3, 5, 7, 10, 14, 21, 30, 45, 60, 90]
-
-GENRE_MAP = {
-    "electronic": 1, "techno": 2, "house": 3, "trance": 4,
-    "drum and bass": 5, "dubstep": 6, "edm": 7, "dance": 8,
-    "pop": 9, "rock": 10, "hip-hop": 11, "jazz": 12,
-    "classical": 13, "metal": 14, "indie": 15, "other": 0,
-}
 
 
 def get_lastfm_top_artists_by_tag(tag, limit=50):
@@ -62,31 +57,6 @@ def get_artist_full_data(artist_name, network):
         }
     except Exception:
         return None
-
-
-def calculate_base_price(artist_listeners, venue_capacity, days_until_event, genre_encoded):
-    """Identična deterministička formula kao u pipeline_task.py."""
-    if artist_listeners > 0:
-        popularity_score = min(math.log10(artist_listeners) / 7.0, 1.0)
-    else:
-        popularity_score = 0.1
-
-    if venue_capacity and venue_capacity > 0:
-        capacity_factor = max(0.5, 1.0 - (venue_capacity / 10000) * 0.3)
-    else:
-        capacity_factor = 0.8
-
-    if days_until_event <= 7:
-        urgency_factor = 1.3
-    elif days_until_event <= 30:
-        urgency_factor = 1.1
-    else:
-        urgency_factor = 1.0
-
-    genre_factor = 1.2 if genre_encoded in [1, 2, 3, 4, 5, 6, 7, 8] else 1.0
-
-    base = 20 + (popularity_score * 130 * capacity_factor * genre_factor)
-    return round(base * urgency_factor, 2)
 
 
 def generate_training_records(artist_data, genre_encoded):
