@@ -78,6 +78,19 @@ def metrics():
 # Inicijalizacija SocketIO s podrškom za CORS
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
 
+def serialize_doc(doc):
+    """Pretvara MongoDB dokument u JSON-serializabilan rječnik."""
+    result = {}
+    for key, value in doc.items():
+        if isinstance(value, datetime):
+            result[key] = value.isoformat()
+        elif isinstance(value, ObjectId):
+            result[key] = str(value)
+        else:
+            result[key] = value
+    return result
+
+
 # Mongo Connection
 # Spajamo se na 'mongo' servis definiran u docker-compose
 client = MongoClient("mongodb://mongo:27017", connect = False)
@@ -447,15 +460,11 @@ def get_tables(event_id):
     
     print(f"Dohvaćam stolove iz MongoDB... (event: {event_id})")
     
-    tables = list(tables_col.find({"event_id": event_id}))
-    
-    # Kovertiraj ObjectId u stringove za JSON serializaciju
-    for table in tables:
-        table['_id'] = str(table['_id'])
-    
+    tables = [serialize_doc(t) for t in tables_col.find({"event_id": event_id})]
+
     # Spremanje liste stolova u Redis cache na 1 sat (3600 sekundi)
     cache.setex(cache_key, 3600, json.dumps(tables))
-    
+
     return jsonify({"tables": tables})
 
 

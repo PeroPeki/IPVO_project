@@ -1,113 +1,58 @@
 # NightClub Manager
 
-> A distributed, real-time, ML-driven nightclub reservation platform — built across four phases for the *Big Data Infrastructure (IPVO)* college course.
+> Distribuirana platforma za rezervaciju stolova u noćnim klubovima s dinamičkim određivanjem cijena temeljenim na strojnom učenju — izrađena u četiri faze za kolegij *Infrastruktura za velike podatke (IPVO)*.
 
-![Stack](https://img.shields.io/badge/stack-Docker%20Compose-2496ED)
-![Backend](https://img.shields.io/badge/backend-Flask%203%20%7C%20Python%203-3776AB)
-![Database](https://img.shields.io/badge/database-MongoDB%207-47A248)
-![Broker](https://img.shields.io/badge/broker-RabbitMQ%203.12-FF6600)
-![Cache](https://img.shields.io/badge/cache-Redis-DC382D)
-![ML](https://img.shields.io/badge/ML-XGBoost%20%2F%20scikit--learn-EE4C2C)
-![Monitoring](https://img.shields.io/badge/monitoring-Prometheus%20%2B%20Grafana-E6522C)
-
-The platform lets visitors browse real, live music events from around the world, purchase tickets and reserve tables in real time. Behind the UI sits a load-balanced Flask backend, an asynchronous message bus, a Redis read-cache, an automated global data pipeline that ingests live event information from Ticketmaster and Last.fm, and a dedicated machine-learning microservice that produces dynamic table-pricing predictions.
+[![Stack](https://img.shields.io/badge/stack-Docker%20Compose-2496ED)](https://docs.docker.com/compose/)
+[![Backend](https://img.shields.io/badge/backend-Flask%203%20%7C%20Python%203-3776AB)](https://flask.palletsprojects.com/)
+[![Database](https://img.shields.io/badge/database-MongoDB%207-47A248)](https://www.mongodb.com/)
+[![Broker](https://img.shields.io/badge/broker-RabbitMQ%203.12-FF6600)](https://www.rabbitmq.com/)
+[![Cache](https://img.shields.io/badge/cache-Redis-DC382D)](https://redis.io/)
+[![ML](https://img.shields.io/badge/ML-XGBoost%20%2F%20scikit--learn-EE4C2C)](https://xgboost.readthedocs.io/)
+[![Monitoring](https://img.shields.io/badge/monitoring-Prometheus%20%2B%20Grafana-E6522C)](https://grafana.com/)
 
 ---
 
-## Table of Contents
+## Sadržaj
 
-1. [What the System Does](#what-the-system-does)
-2. [Phase 4 Highlights — Live Data and Machine Learning](#phase-4-highlights--live-data-and-machine-learning)
-3. [Phase Roadmap](#phase-roadmap)
-4. [System Architecture](#system-architecture)
-5. [Technology Stack](#technology-stack)
-6. [Repository Layout](#repository-layout)
-7. [File Reference](#file-reference)
-8. [Service Catalogue](#service-catalogue)
-9. [MongoDB Collections](#mongodb-collections)
-10. [HTTP API Reference](#http-api-reference)
-11. [Quick Start](#quick-start)
-12. [Observability](#observability)
-
----
-
-## What the System Does
-
-| Capability | Detail |
-|------------|--------|
-| **Global live events** | Every club/venue and event in the system is fetched in real time from the Ticketmaster Discovery API across 20 cities worldwide (Europe, North America, Australia). No hardcoded data. |
-| **Browse and book** | Users log in with a username, browse venues and real upcoming events, purchase a ticket and reserve any of the available tables for that event. |
-| **Real-time updates** | Every reservation or cancellation propagates to all connected browsers within milliseconds via RabbitMQ → Socket.IO, eliminating the need for manual refresh. |
-| **Horizontal scalability** | Two NGINX replicas serve the frontend behind a Traefik load balancer; the Flask backend is also load-balanced with sticky cookies for WebSocket affinity. |
-| **High-throughput reads** | Frequently requested table lists and event feeds are cached in Redis with deterministic invalidation on every write. |
-| **Periodic analytics** | A Celery worker with an embedded beat scheduler aggregates reservation and ticket metrics into a `reports` collection on a recurring schedule. |
-| **Live data ingestion** | A scheduled pipeline pulls upcoming music events from the Ticketmaster Discovery API for 20 global cities and enriches each artist with Last.fm popularity signals. On first boot the pipeline triggers automatically if the database is empty. |
-| **Dynamic pricing with ML** | A regression model (Random Forest vs XGBoost, lower-RMSE wins) predicts an optimal table price from real-world artist popularity, venue capacity, urgency, genre and demand features. |
-| **Asynchronous price updates** | The backend publishes feature payloads to a durable RabbitMQ queue; a dedicated prediction microservice consumes them, runs inference, logs the change and updates the affected event. |
-| **End-to-end observability** | Custom backend metrics (request count, latency histogram) and edge-proxy metrics (Traefik) are scraped by Prometheus and visualised in Grafana. |
+1. [Što sustav radi](#što-sustav-radi)
+2. [Arhitektura sustava](#arhitektura-sustava)
+3. [Faze razvoja](#faze-razvoja)
+4. [Tehnološki stack](#tehnološki-stack)
+5. [Struktura repozitorija](#struktura-repozitorija)
+6. [Brzi start](#brzi-start)
+7. [Varijable okoline](#varijable-okoline)
+8. [Servisni katalog](#servisni-katalog)
+9. [MongoDB kolekcije](#mongodb-kolekcije)
+10. [HTTP API referenca](#http-api-referenca)
+11. [Celery rasporednik](#celery-rasporednik)
+12. [Dinamičke cijene — ML pipeline](#dinamičke-cijene--ml-pipeline)
+13. [Nadzor sustava](#nadzor-sustava)
+14. [Testiranje](#testiranje)
+15. [Poznata ograničenja](#poznata-ograničenja)
 
 ---
 
-## Phase 4 Highlights — Live Data and Machine Learning
+## Što sustav radi
 
-Phase 4 introduces a self-contained data-engineering and ML stack on top of the Phase 1–3 platform. It satisfies all five course requirements (live data, processing, storage, ML, integration) without using mock or pre-packaged datasets.
+Platforma korisnicima omogućuje pregled stvarnih glazbenih događaja s Ticketmastera, kupnju ulaznica i rezervaciju stolova u realnom vremenu. Iza korisničkog sučelja nalaze se:
 
-### Global data pipeline
-
-- **20 target cities** — Zagreb, London, Berlin, Amsterdam, Barcelona, Paris, Madrid, Milan, Vienna, Prague, New York, Los Angeles, Chicago, Miami, Las Vegas, Boston, Atlanta, Toronto, Sydney, Melbourne.
-- Each **Ticketmaster venue** automatically becomes a **club** in the system, keyed by a stable `tm-<venue_id>` identifier. Events are linked to their venue via `club_id`, so the existing frontend navigation (Clubs → Events → Tables) continues to work unchanged.
-- Each event is enriched with: event image, venue address, local date/time, Ticketmaster genre classification, original ticket price ranges, and a direct Ticketmaster URL.
-- Each new event automatically receives **20 reservable tables** (all free at creation).
-- **Auto-bootstrap**: on backend startup, if the `events` collection is empty, the pipeline is queued automatically via Celery — no manual step needed on first run.
-
-### Data files
-
-| File | Role |
-|------|------|
-| `pipeline_task.py` | Pure helper functions: `fetch_ticketmaster_events`, `get_lastfm_artist_data`, `encode_genre`, `calculate_base_price`, `slugify` and time utilities. |
-| `tasks.py` | Celery task `run_data_pipeline` — orchestrates the full flow: TM fetch → Last.fm enrichment → club upsert → event upsert → table creation → Redis invalidation. |
-| `generate_training_data.py` | Fetches top artists for 10 genres from Last.fm and generates a fully deterministic training set (artist × capacity tier × days-until-event). No `Faker`, no `random()`. |
-| `train_model.py` | 80/20 train/test split, trains Random Forest and XGBoost, compares RMSE, persists the winner to the shared `models` volume and writes metadata to MongoDB. |
-
-### ML feature vector
-
-All four code paths (`pipeline_task.py`, `generate_training_data.py`, `train_model.py`, `prediction_service/service.py`) use identical features in identical order:
-
-| Feature | Source | Transformation |
-|---------|--------|----------------|
-| `log_listeners` | Last.fm listeners | `log10(x + 1)` |
-| `log_playcount` | Last.fm playcount | `log10(x + 1)` |
-| `genre_encoded` | Last.fm tags → GENRE_MAP | 0–15 |
-| `venue_capacity` | Ticketmaster venue | raw integer |
-| `days_until_event` | event date – today | raw integer |
-| `tickets_sold_ratio` | deterministic formula | 0.0–1.0 |
-| `day_of_week` | event date | 0 (Mon) – 6 (Sun) |
-
-### Bug fixes included in Phase 4
-
-| Bug | Fix |
-|-----|-----|
-| `requests` module imported locally inside a function | Moved to top-level import |
-| RabbitMQ consumer only started when model was loaded | Consumer always starts; sends `NACK, requeue=False` if model missing |
-| N+1 MongoDB queries in `GET /api/clubs` | Replaced with a single `$lookup` aggregation |
-| Double query `find_one({id}) or find_one({ticketmaster_id})` | Replaced with `$or` query |
-| `depends_on: rabbitmq` without health-check condition | Changed to `condition: service_healthy` for all three consumers |
-| Duplicate `import json` / `from flask import ...` mid-file | Removed duplicate imports |
+| Mogućnost | Opis |
+|-----------|------|
+| **Stvarni glazbeni eventi** | Svi klubovi i eventi dohvaćaju se s Ticketmaster Discovery API-ja za 20 gradova diljem svijeta. Nema hardkodiranih podataka. |
+| **Pregled i rezervacija** | Korisnik se prijavljuje korisničkim imenom, pregledava venue-e i nadolazeće evente, kupuje ulaznicu i rezervira slobodni stol. |
+| **Ažuriranje u realnom vremenu** | Svaka rezervacija ili otkazivanje propagira se svim spojenim preglednicima unutar milisekundi putem RabbitMQ → Socket.IO. |
+| **Horizontalna skalabilnost** | Dvije NGINX replike servira frontend iza Traefik load balancera; Flask backend je load-balanced sa sticky kolačićima za WebSocket afinitet. |
+| **Brze čitanja** | Često zahtijevane liste stolova i event feed cachiraju se u Redisu s determinističkom invalidacijom pri svakom zapisu. |
+| **Periodička analitika** | Celery worker s ugrađenim beat raspoređivačem agregira metrike rezervacija i ulaznica u kolekciju `reports`. |
+| **Automatski dohvat podataka** | Raspoređeni pipeline povlači nadolazeće glazbene evente za 20 globalnih gradova i obogaćuje svakog izvođača Last.fm popularnosti signalima. Automatski se okida pri prvom pokretanju ako je baza prazna. |
+| **Dinamičke cijene s ML-om** | Regresijski model (Random Forest vs XGBoost, pobjeđuje niži RMSE) predviđa optimalnu cijenu stola iz popularnosti izvođača, kapaciteta, hitnosti, žanra i popunjenosti. |
+| **Asinkrono ažuriranje cijena** | Backend objavljuje feature payload u trajni RabbitMQ red; namjenski prediction mikroservis ga konzumira, pokreće inferenciju, zapisuje promjenu i ažurira pogođeni event. |
+| **End-to-end nadzor** | Vlastite metrike backenda i metrike edge proxija (Traefik) skuplja Prometheus i vizualizira u Grafani. |
+| **Tjedni automatski retraining** | Svake nedjelje u 3:00 Celery Beat automatski regenerira training podatke i trenira novi model. |
 
 ---
 
-## Phase Roadmap
-
-| Phase | Theme | Components Introduced |
-|-------|-------|----------------------|
-| **1** | Core CRUD and horizontal scaling | Flask backend, MongoDB, Traefik load balancer, two NGINX frontend replicas, deterministic seed scripts |
-| **2** | Real-time updates and periodic analytics | RabbitMQ fanout exchange, Socket.IO, Celery worker with embedded beat, daily-report task |
-| **3** | Read-path optimisation and monitoring | Redis read-through cache with invalidation, Prometheus instrumentation, Grafana dashboards |
-| **4** | Global live data, ML pricing, bug fixes | Ticketmaster + Last.fm pipeline (20 cities), auto-bootstrap, dynamic clubs from venues, deterministic training-data generator, Random Forest vs XGBoost trainer, dedicated `prediction_service` microservice, rich frontend (images, filtering, auto-refresh) |
-
----
-
-## System Architecture
+## Arhitektura sustava
 
 ```
                   ┌─────────────────┐
@@ -124,341 +69,502 @@ All four code paths (`pipeline_task.py`, `generate_training_data.py`, `train_mod
           ▼                           ▼       ┌──────────────┐
    ┌────────────┐              ┌────────────┐ │   Grafana    │
    │ web1/web2  │              │  backend   │ │    :3000     │
-   │ (NGINX)    │              │  (Flask +  │ └──────────────┘
-   │ static UI  │              │  Socket.IO)│
+   │  (NGINX)   │              │  (Flask +  │ └──────────────┘
+   │ static UI  │              │ Socket.IO) │
    └────────────┘              └─┬───┬───┬──┘
                                  │   │   │
-        ┌────────────────────────┘   │   └────────────────────┐
-        ▼                            ▼                        ▼
- ┌─────────────┐             ┌─────────────┐          ┌──────────────┐
- │  MongoDB    │             │   Redis     │          │   RabbitMQ   │
- │   :27017    │             │   :6379     │          │ :5672/:15672 │
- └─────▲───────┘             └─────▲───────┘          └──┬───────▲───┘
-       │                           │                     │       │
-       │                           │                     │       │
- ┌─────┴───────┐             ┌─────┴───────┐      ┌──────▼───────┴───┐
- │   seed      │             │  analytics  │      │ prediction_      │
- │  (one-shot) │             │   _worker   │      │ service          │
- └─────────────┘             │ (Celery +   │      │ (Flask + ML +    │
-                             │  beat)      │      │  RabbitMQ        │
-                             └─────────────┘      │  consumer)       │
-                                                  └──────────────────┘
+        ┌────────────────────────┘   │   └───────────────────┐
+        ▼                            ▼                       ▼
+ ┌─────────────┐             ┌─────────────┐          ┌─────────────┐
+ │   MongoDB   │             │    Redis    │          │  RabbitMQ   │
+ │   :27017    │             │   :6379     │          │  :5672      │
+ └─────▲───────┘             └─────────────┘          └──┬──────▲───┘
+       │                                                  │      │
+ ┌─────┴──────────┐                               ┌───────▼──────┴────┐
+ │ analytics_     │                               │ prediction_       │
+ │ worker         │                               │ service           │
+ │ (Celery +      │                               │ (Flask + ML +     │
+ │  Beat)         │                               │  RabbitMQ         │
+ └────────────────┘                               │  consumer)        │
+                                                  └───────────────────┘
 ```
 
-Traefik routes traffic on `Host(localhost)`:
-- `/api`, `/socket.io`, `/metrics` → `backend`
-- `/predict-price`, `/model-info` → `prediction_service`
-- Everything else → `web1` / `web2` (round-robin)
+**Traefik routing pravila** (sve na `Host(localhost)`):
+
+| Putanja | Cilj | Prioritet |
+|---------|------|-----------|
+| `/api/*`, `/socket.io/*`, `/metrics` | `backend:5000` | 100 |
+| `/predict-price`, `/model-info` | `prediction_service:6000` | 200 |
+| Sve ostalo | `web1` / `web2` round-robin | nizak |
 
 ---
 
-## Technology Stack
+## Faze razvoja
 
-| Layer | Technology |
-|-------|------------|
-| Reverse proxy / load balancer | Traefik 2.11 (Docker provider, native Prometheus exporter) |
-| Frontend | Static HTML / CSS / JavaScript served by two NGINX replicas |
-| Backend API | Python 3, Flask 3, Flask-SocketIO, gevent |
-| Async processing | Celery 5 (worker + beat in a single container) |
-| Database | MongoDB 7 |
-| Message broker | RabbitMQ 3.12 (with management plugin) |
-| Cache | Redis (alpine) |
-| Monitoring | Prometheus 2.51, Grafana 10.4 |
-| Machine learning | scikit-learn (Random Forest), XGBoost, joblib |
-| Live data sources | Ticketmaster Discovery API, Last.fm API (`pylast`) |
-| Container runtime | Docker Compose |
+| Faza | Tema | Uvedene komponente |
+|------|------|--------------------|
+| **1** | Core CRUD i horizontalno skaliranje | Flask backend, MongoDB, Traefik load balancer, dvije NGINX frontend replike |
+| **2** | Ažuriranje u realnom vremenu i periodička analitika | RabbitMQ fanout exchange, Socket.IO, Celery worker s ugrađenim beatom, task za dnevni izvještaj |
+| **3** | Optimizacija čitanja i nadzor | Redis read-through cache s invalidacijom, Prometheus instrumentacija, Grafana dashboardi |
+| **4** | Globalni živi podaci, ML cijene, bug ispravci | Ticketmaster + Last.fm pipeline (20 gradova), auto-bootstrap, dinamički klubovi iz venue-a, deterministički generator training podataka, Random Forest vs XGBoost trener, namjenski `prediction_service` mikroservis, bogat frontend (slike, filtriranje, auto-refresh, dinamičke cijene), tjedni automatski retraining |
 
 ---
 
-## Repository Layout
+## Tehnološki stack
+
+| Sloj | Tehnologija | Verzija |
+|------|-------------|---------|
+| Reverse proxy / load balancer | Traefik (Docker provider, Prometheus exporter) | 2.11 |
+| Frontend | Statički HTML/CSS/JS, dvije NGINX replike | nginx:alpine |
+| Backend API | Python, Flask, Flask-SocketIO, gevent | Flask 3, Python 3 |
+| Asinkrona obrada | Celery worker + beat u jednom kontejneru | Celery 5 |
+| Baza podataka | MongoDB | 7.0 |
+| Message broker | RabbitMQ (management plugin) | 3.12 |
+| Cache | Redis | alpine |
+| Nadzor | Prometheus + Grafana (auto-provisioning) | 2.51 / 10.4 |
+| Strojno učenje | scikit-learn (Random Forest), XGBoost, joblib, pandas | latest |
+| Živi podaci | Ticketmaster Discovery API, Last.fm API (pylast) | — |
+| Runtime | Docker Compose | — |
+
+---
+
+## Struktura repozitorija
 
 ```
 IPVO_projekt/
-├── docker-compose.yml
+├── docker-compose.yml               # Orkestracija svih servisa
+├── .env                             # Lokalni API ključevi (git-ignored)
+├── .env.example                     # Predložak varijabli okoline
 ├── README.md
-├── context.md                       # Developer change log (what was built and why)
-├── task.md                          # Bug tracker + future tasks + recommendations
-├── .env                             # Local secrets (git-ignored)
-├── .env.example                     # Template for required environment variables
 │
 ├── frontend/
 │   ├── Dockerfile
-│   ├── index.html                   # Login screen
-│   ├── clubs.html                   # Venue browser with city/country filter + auto-polling
-│   ├── events.html                  # Event feed with images, artist, pricing badges
-│   ├── buy-ticket.html              # Ticket purchase with full event detail
-│   ├── tables.html                  # Real-time table reservation grid
+│   ├── index.html                   # Ekran za prijavu
+│   ├── clubs.html                   # Preglednik venue-a s filterima
+│   ├── events.html                  # Feed evenata sa slikama i cijenama
+│   ├── buy-ticket.html              # Kupnja ulaznice s detaljima eventa
+│   ├── tables.html                  # Real-time grid rezervacije stolova
 │   └── style.css
 │
 ├── backend/
 │   ├── Dockerfile
 │   ├── requirements.txt
-│   ├── app.py                       # Flask + Socket.IO core + all REST routes
-│   ├── tasks.py                     # Celery tasks (pipeline, daily report)
-│   ├── celery_config.py             # Broker URL + beat schedule
-│   ├── pipeline_task.py             # TM/Last.fm helpers + pricing formula
-│   ├── generate_training_data.py    # Last.fm-based training set generator
+│   ├── app.py                       # Flask + Socket.IO core + sve REST rute
+│   ├── tasks.py                     # Celery taskovi (pipeline, dnevni izvještaj, retraining)
+│   ├── celery_config.py             # Broker URL + beat raspored
+│   ├── pipeline_task.py             # TM/Last.fm helperi + formula za cijene
+│   ├── generate_training_data.py    # Generator training skupa (Last.fm izvođači)
 │   ├── train_model.py               # RF vs XGBoost trainer
-│   └── models/                      # Mount point for the shared models volume
+│   ├── run_tests.py                 # Sveobuhvatni integracijski testovi
+│   └── models/                      # Mount točka za dijeljeni models volumen
 │
 ├── prediction_service/
 │   ├── Dockerfile
 │   ├── requirements.txt
-│   └── service.py                   # ML inference service + RabbitMQ consumer
+│   └── service.py                   # ML inferencija + RabbitMQ consumer
 │
 ├── seed-tools/
 │   ├── Dockerfile
 │   ├── package.json
-│   └── seed.js                      # Clears stale data + creates MongoDB indexes
+│   └── seed.js                      # Opcionalni alat za ručno kreiranje MongoDB indeksa
+│
+├── mongo-init/
+│   └── seed.js                      # Zastarjelo — samo dokumentacijski komentar
 │
 ├── prometheus/
-│   └── prometheus.yml
+│   └── prometheus.yml               # Konfiguracija scrapeanja (15s interval)
+│
+├── grafana/
+│   └── provisioning/                # Auto-provisioning dashboarda pri pokretanju
+│       ├── datasources/
+│       └── dashboards/
 │
 └── monitoring/
-    └── prometheus.yml               # Alternative scrape configuration
+    └── prometheus.yml               # Alternativna scrape konfiguracija
 ```
 
 ---
 
-## File Reference
+## Brzi start
 
-### Orchestration
+### Preduvjeti
 
-| File | Purpose |
-|------|---------|
-| `docker-compose.yml` | Declarative orchestration of all twelve services on the shared `app-net` network. Includes build contexts, environment variables, Traefik labels, `service_healthy` conditions for RabbitMQ and the named volumes (`mongo_`, `models`). |
-| `.env` | Holds `TICKETMASTER_API_KEY` and `LASTFM_API_KEY`. Required for the data pipeline. Excluded from version control. |
-| `.env.example` | Template showing which environment variables are needed. |
+- Docker i Docker Compose instalirani i pokrenuti
+- Ticketmaster API ključ — besplatna registracija na [developer.ticketmaster.com](https://developer.ticketmaster.com/)
+- Last.fm API ključ — besplatna registracija na [last.fm/api](https://www.last.fm/api)
 
-### Frontend (`frontend/`)
-
-| File | Purpose |
-|------|---------|
-| `index.html` | Login screen — captures the username, calls `POST /api/users` and stores it in `localStorage`. |
-| `clubs.html` | Venue browser. Fetches dynamic venues from `GET /api/clubs` with optional `?city` / `?country` filters. Populates the country dropdown from `GET /api/cities`. Auto-polls every 10 seconds while the database is empty (pipeline still running), then renders venue cards automatically once data arrives. |
-| `events.html` | Event feed for a selected venue. Displays Ticketmaster event image, artist, date/time, city, country, dynamic price with a 🔥 high-demand badge, genre tag and a link to the original Ticketmaster page. |
-| `buy-ticket.html` | Ticket-purchase flow. Fetches full event detail from `GET /api/events/<id>` and renders: hero image, artist, venue/address, capacity, genre, days-until, Last.fm statistics, current vs base price block and a Ticketmaster link. |
-| `tables.html` | Real-time table grid. Opens a Socket.IO connection and re-renders on `table_updated` events. Shows a mini event summary (image, artist, venue, date) above the grid. Reads dynamic pricing from `GET /api/events/<id>/pricing` and shows a high-demand warning when `current_price > base_price × 1.2`. |
-| `style.css` | Shared styling including dark theme, card/grid layouts and all Phase 4 additions (event-card, hot-badge, genre-tag, filter-bar, event-summary, price-block, lastfm-block). |
-
-### Backend (`backend/`)
-
-| File | Purpose |
-|------|---------|
-| `app.py` | Flask + Socket.IO core. REST routes (see API Reference), Prometheus middleware, RabbitMQ producer/consumer, Redis caching, and a **startup bootstrap thread** that auto-queues `run_data_pipeline` if the events collection is empty. |
-| `tasks.py` | Celery tasks: `generate_daily_report` (daily aggregates) and `run_data_pipeline` (TM fetch → Last.fm enrichment → club upsert → event upsert → table creation → cache invalidation). |
-| `celery_config.py` | RabbitMQ broker URL, result backend, and the beat schedule (daily report every 60 s, data pipeline once per day). |
-| `pipeline_task.py` | Pure helper functions for the pipeline: `fetch_ticketmaster_events` (extracts image, address, genre, price ranges), `get_lastfm_artist_data`, `encode_genre`, `calculate_base_price` (deterministic pricing formula), `slugify` and time utilities. |
-| `generate_training_data.py` | Builds the ML training set. For each of 10 genres it fetches the top 30 artists from Last.fm, retrieves their full stats and emits one row per (artist × 10 capacity tiers × 11 days-until scenarios) into `ml_training_data`. Fully deterministic — up to ~33,000 records. |
-| `train_model.py` | Loads `ml_training_data`, applies `log10` transforms, performs 80/20 split, trains RandomForest and XGBoost, persists the winner to the shared volume and writes a `model_metadata` document. |
-
-### Prediction Service (`prediction_service/`)
-
-| File | Purpose |
-|------|---------|
-| `service.py` | Loads the trained model on boot (degraded mode if missing). Exposes `POST /predict-price`, `GET /model-info` and `GET /health`. Caches predictions in Redis (TTL 300 s). Background daemon thread always runs consuming `price_update_queue` — if the model is absent it `NACK`s without requeue. Writes `price_log` and updates `current_price` whenever the predicted price moves by more than €5. |
-
-### Seed (`seed-tools/`)
-
-| File | Purpose |
-|------|---------|
-| `seed.js` | One-shot container. Clears all stale hardcoded data from `clubs`, `events`, `tables` and `reservations` collections, then creates optimised MongoDB indexes. Real data is populated by the Ticketmaster pipeline — this script does **not** insert any venues or events. |
-
-### Monitoring
-
-| File | Purpose |
-|------|---------|
-| `prometheus/prometheus.yml` | Active scrape config (15 s interval) for `backend` (`/metrics`) and Traefik (`:8082`). |
-
----
-
-## Service Catalogue
-
-Every service runs on the shared `app-net` Docker network.
-
-### `traefik`
-Edge reverse proxy and load balancer. Port 80 for traffic, 8080 for dashboard, 8082 for metrics. Routing rules are declared via Docker labels.
-
-### `web1` / `web2`
-Two NGINX containers serving the static frontend in round-robin. No state — purely serve HTML/CSS/JS files from a read-only volume mount.
-
-### `backend`
-Flask + Socket.IO core. Responsibilities:
-- REST API under `/api/*` (see HTTP API Reference)
-- Socket.IO real-time channel over `/socket.io/*`
-- RabbitMQ **producer** for the `table_events` fanout exchange (reservations/cancellations)
-- RabbitMQ **consumer thread** that re-broadcasts to Socket.IO clients
-- RabbitMQ **producer** for `price_update_queue` (async pricing requests)
-- Redis read-through cache for tables (`tables_list_<id>`, 1 h TTL) and event feeds
-- Prometheus `/metrics` endpoint
-- **Startup bootstrap thread**: queues `run_data_pipeline` via Celery if `events` is empty
-
-### `analytics_worker`
-Second Python container from the same backend image, running `celery -A tasks worker --beat`. Executes:
-- `generate_daily_report` — aggregates metrics into `reports`
-- `run_data_pipeline` — fetches 20 global cities from Ticketmaster, enriches with Last.fm, upserts clubs/events/tables into MongoDB, invalidates Redis
-
-### `prediction_service`
-Dedicated Flask microservice that owns the ML model:
-- Loads `pricing_model.pkl` and `feature_cols.pkl` from the shared `models` volume
-- `POST /predict-price`, `GET /model-info`, `GET /health`
-- Caches predictions in Redis (`price_prediction_<id>`, TTL 300 s)
-- Background daemon thread always consumes `price_update_queue`; NACKs without requeue if model is not yet trained
-
-### `mongo`
-MongoDB 7. On first start, `mongo-init/` scripts run. The `seed` service then clears any stale data and creates indexes.
-
-### `seed`
-Node.js one-shot container. Clears old hardcoded collections, creates MongoDB indexes, exits. Runs after `mongo` is started.
-
-### `rabbitmq`
-RabbitMQ 3.12 with management plugin. Hosts:
-- `table_events` fanout exchange (real-time reservation events)
-- `price_update_queue` durable queue (async pricing)
-
-A Docker healthcheck (`rabbitmq-diagnostics -q ping`) ensures dependent services wait until RabbitMQ is fully ready.
-
-### `redis`
-In-memory cache for table lists, event feeds and prediction-service responses.
-
-### `prometheus`
-Scrapes metrics every 15 s from the backend and Traefik.
-
-### `grafana`
-Visualises Prometheus metrics. Port 3000, credentials `admin` / `admin`.
-
----
-
-## MongoDB Collections
-
-| Collection | Populated by | Purpose |
-|------------|-------------|---------|
-| `clubs` | `run_data_pipeline` | One document per Ticketmaster venue; keyed by `id = "tm-<venue_id>"`. Fields: name, city, country, address, capacity, lat/lon. |
-| `events` | `run_data_pipeline` | One document per TM event. Linked to its venue via `club_id`. Fields include: `ticketmaster_id`, `artist_name`, `image_url`, `event_date`, `url`, `artist_listeners`, `artist_playcount`, `genre_encoded`, `base_price`, `current_price`, `venue_capacity`, `days_until_event`. |
-| `tables` | `run_data_pipeline` | 20 free tables per event, created on first pipeline run. Linked by `event_id` (= `ticketmaster_id`). |
-| `reservations` | `backend` | Append-only audit log of every table reservation. |
-| `users` | `backend` | Username registry. |
-| `tickets` | `backend` | Per-user, per-event ticket ownership. |
-| `reports` | `analytics_worker` | Daily aggregate snapshots (reservation + ticket counts). |
-| `ml_training_data` | `generate_training_data.py` | Training rows: real Last.fm artists × 10 capacity tiers × 11 days-until scenarios. |
-| `price_log` | `prediction_service` | Append-only log of every ML-driven price change (old price → new price). |
-| `model_metadata` | `train_model.py` | Latest model name, RF RMSE, XGBoost RMSE, feature list, training set size, timestamp. |
-
----
-
-## HTTP API Reference
-
-### Backend (routed through Traefik on port 80)
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/clubs` | List venues. Optional filters: `?city=`, `?country=`. Returns `event_count` per venue via a single `$lookup` aggregation. |
-| POST | `/api/clubs` | Insert a club document manually. |
-| GET | `/api/clubs/<club_id>/events` | Events for a venue, sorted by date ascending. |
-| GET | `/api/events` | Global event feed. Filters: `?city=`, `?country=`, `?genre=`, `?q=` (full-text), `?limit=` (default 100, max 500). Redis-cached for 60 s. |
-| GET | `/api/events/<event_id>` | Full event document by `id` or `ticketmaster_id`. |
-| GET | `/api/cities` | Aggregated list of cities + event counts (for filter dropdowns). |
-| POST | `/api/sync-events` | Manually queue `run_data_pipeline` via Celery. Returns `task_id`. |
-| GET | `/api/events/<event_id>/tables` | Tables for an event (Redis-cached, 1 h TTL). |
-| POST | `/api/events/<event_id>/tables/<table_id>/reserve` | Reserve a table (RabbitMQ broadcast + cache invalidation). |
-| POST | `/api/events/<event_id>/tables/<table_id>/cancel` | Cancel a reservation. |
-| POST | `/api/users` | Create / ensure a user. |
-| POST | `/api/users/<username>/buy-ticket/<event_id>` | Purchase a ticket. |
-| GET | `/api/users/<username>/has-ticket/<event_id>` | Ticket ownership check. |
-| GET | `/api/reports` | Most recent 10 daily reports. |
-| GET | `/api/events/<event_id>/pricing` | `{base_price, current_price, high_demand, ...}`. Redis-cached for 60 s. |
-| POST | `/api/events/<event_id>/request-price-update` | Manually send pricing features to the prediction queue. |
-| GET | `/api/price-log` | Last 50 ML-driven price changes. |
-| GET | `/api/model-status` | Proxy to `prediction_service /model-info`. |
-| GET | `/metrics` | Prometheus scrape endpoint. |
-
-### Prediction Service (routed through Traefik on port 80)
-
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/predict-price` | Input: `{artist_listeners, artist_playcount, genre_encoded, venue_capacity, days_until_event, tickets_sold_ratio, day_of_week, event_id, current_price}`. Returns predicted price; updates `price_log` and event if delta > €5. |
-| GET | `/model-info` | Latest `model_metadata` document. |
-| GET | `/health` | `{"status": "ok", "model_loaded": true/false}`. |
-
-### Real-Time Channel
-
-Socket.IO event `table_updated` is broadcast to **all** connected clients whenever a reservation or cancellation flows through the `table_events` exchange. The frontend filters by `event_id` client-side.
-
----
-
-## Quick Start
-
-> **Prerequisites:** Docker and Docker Compose installed. API keys in a `.env` file at the repository root (copy from `.env.example`).
+### 1. Priprema API ključeva
 
 ```bash
-# 1. Add your API keys
 cp .env.example .env
-# Edit .env and fill in TICKETMASTER_API_KEY and LASTFM_API_KEY
-
-# 2. Build images and start the entire stack
-docker compose up -d --build
-# Builds all images fresh and starts all services in detached mode
-
-# 3. Watch the pipeline run automatically
-docker compose logs analytics_worker -f --tail=60
-# You will see: "Obrada grada: London, GB", "Pipeline gotov: {...}"
-# clubs.html auto-polls and populates once events arrive (~2–5 min)
-
-# --- ML model (optional, for dynamic pricing) ---
-
-# 4. Generate the training dataset (~30 min, hits Last.fm API)
-docker compose exec analytics_worker python generate_training_data.py
-# Fetches top artists per genre from Last.fm, writes ~33 000 training rows to MongoDB
-
-# 5. Train the model (RF vs XGBoost, picks lower RMSE)
-docker compose exec analytics_worker python train_model.py
-# Trains both models, saves the winner to the shared models volume
-
-# 6. Reload the prediction service so it picks up the new model
-docker compose restart prediction_service
-# Forces the prediction service to reload pricing_model.pkl from disk
-
-# --- Utilities ---
-
-# Manually re-trigger the data pipeline (e.g. after API key change)
-docker compose exec analytics_worker celery -A tasks call tasks.run_data_pipeline
-# Queues a new pipeline run immediately without waiting for the schedule
+# Otvori .env i upiši svoje ključeve:
+# TICKETMASTER_API_KEY=tvoj_kljuc
+# LASTFM_API_KEY=tvoj_kljuc
 ```
 
-### Endpoints
+### 2. Pokretanje sustava
 
-| URL | What you get |
-|-----|--------------|
-| http://localhost/ | Frontend (login → venues → events → tables) |
-| http://localhost/api/events | Global event feed (JSON) |
-| http://localhost/api/cities | City + event count aggregation (JSON) |
-| http://localhost/api/model-status | Latest ML model metadata |
-| http://localhost/metrics | Prometheus metrics from the backend |
-| http://localhost:8080/ | Traefik dashboard |
-| http://localhost:15672/ | RabbitMQ Management UI (`guest` / `guest`) |
-| http://localhost:9090/ | Prometheus |
+```bash
+docker compose up -d --build
+```
+
+Pričekaj ~30 sekundi da se svi kontejneri podignu. Provjeri status:
+
+```bash
+docker compose ps
+```
+
+Svi servisi trebaju biti `running` ili `healthy`.
+
+### 3. Automatski dohvat podataka
+
+Ako je baza prazna, backend automatski okida pipeline pri prvom startu.
+Prati napredak:
+
+```bash
+docker compose logs analytics_worker -f --tail=60
+# Vidjet ćeš: "Obrada grada: London, GB" ... "Pipeline gotov"
+# Frontend se automatski osvježava čim podaci stignu (~2–5 min)
+```
+
+Ili ručno pokreni pipeline odmah:
+
+```bash
+curl -X POST http://localhost/api/sync-events
+```
+
+### 4. Pristup aplikaciji
+
+| URL | Opis |
+|-----|------|
+| http://localhost/ | Frontend aplikacija |
 | http://localhost:3000/ | Grafana (`admin` / `admin`) |
+| http://localhost:15672/ | RabbitMQ Management (`guest` / `guest`) |
+| http://localhost:8080/ | Traefik dashboard |
+| http://localhost:9090/ | Prometheus |
+
+### 5. ML model za dinamičke cijene (opcionalno)
+
+ML model se automatski trenira svake nedjelje u 4:00 (Celery Beat). Za ručno pokretanje:
+
+```bash
+# Korak 1: Generiraj training podatke (~30 min, poziva Last.fm API)
+docker compose exec analytics_worker python generate_training_data.py
+# Dohvaća top 30 izvođača za 10 žanrova → ~33.000 training zapisa u MongoDB
+
+# Korak 2: Treniraj model (Random Forest vs XGBoost, spremi bolji)
+docker compose exec analytics_worker python train_model.py
+# Ispisuje RMSE oba modela i sprema pobjednika u /app/models/
+
+# Korak 3: Provjeri status modela
+curl http://localhost/api/model-status
+```
+
+### Zaustavljanje
+
+```bash
+# Zaustavi, ali zadrži podatke
+docker compose down
+
+# Zaustavi i obriši sve podatke (baza, modeli)
+docker compose down -v
+```
 
 ---
 
-## Observability
+## Varijable okoline
 
-The Flask backend records two custom metrics via `prometheus_client`:
+Kopiraj `.env.example` u `.env` i popuni vrijednosti:
 
-- `http_requests_total{method, endpoint, status}` — request counter.
-- `http_request_duration_seconds{endpoint}` — latency histogram.
+| Varijabla | Opis | Obavezno |
+|-----------|------|----------|
+| `TICKETMASTER_API_KEY` | Ticketmaster Discovery API ključ | Da |
+| `LASTFM_API_KEY` | Last.fm API ključ | Da |
 
-Traefik exports its own request metrics on the `metrics` entry point (port 8082). Both are scraped by Prometheus every 15 seconds and visualised in Grafana, providing end-to-end visibility from the edge proxy down to individual API endpoints.
+Bez ovih ključeva pipeline preskače dohvat podataka i baza ostaje prazna.
 
 ---
 
-## Known Limitations & Future Work
+## Servisni katalog
 
-See `task.md` for the full list of open tasks and improvement recommendations. Key items:
+Svi servisi rade na dijeljenom Docker `app-net` mreži.
 
-- No authentication/authorisation — `username` is stored unverified in `localStorage`
-- No input validation on POST endpoints
-- No rate limiting — API is open to abuse
-- WebSocket broadcasts go to all clients (not room-scoped by event)
-- `generate_training_data.py` drops the collection without confirmation prompt
-- ML model has no versioning — each retrain overwrites the previous `.pkl`
+### `traefik`
+Edge reverse proxy i load balancer. Port 80 za promet, 8080 za dashboard, 8082 za Prometheus metrike. Routing pravila deklarirana su putem Docker labela.
+
+### `web1` / `web2`
+Dvije NGINX instance koje servira statički frontend u round-robin načinu. Bez stanja — čitaju datoteke s read-only bind mounta.
+
+### `backend`
+Flask + Socket.IO core. Odgovornosti:
+- REST API pod `/api/*`
+- Socket.IO real-time kanal pod `/socket.io/*`
+- RabbitMQ **producer** za `table_events` fanout exchange (rezervacije/otkazivanja)
+- RabbitMQ **consumer thread** koji re-broadcastira na Socket.IO klijente u sobi eventa
+- RabbitMQ **producer** za `price_update_queue` (asinkroni zahtjevi za cijene)
+- Redis read-through cache za stolove (`tables_list_<id>`, 1h TTL) i event feed (60s TTL)
+- Prometheus `/metrics` endpoint
+- **Startup bootstrap thread**: automatski okida `run_data_pipeline` ako je kolekcija `events` prazna
+
+### `analytics_worker`
+Drugi Python kontejner iz iste backend slike, pokreće `celery -A tasks worker --beat`. Izvršava:
+- `generate_daily_report` — agregira metrike u `reports` svakih 60 sekundi
+- `run_data_pipeline` — jednom dnevno dohvaća 20 globalnih gradova, obogaćuje s Last.fm, upsertira klubove/evente/stolove u MongoDB, invalidira Redis cache
+- `run_generate_training_data` — svake nedjelje u 3:00 regenerira ML training skup
+- `run_train_model` — svake nedjelje u 4:00 trenira i sprema novi ML model
+
+### `prediction_service`
+Namjenski Flask mikroservis koji posjeduje ML model:
+- Učitava `pricing_model.pkl` i `feature_cols.pkl` s dijeljenog `models` volumena
+- Radi u degradiranom modu (HTTP 503) ako model još nije treniran
+- Background daemon thread svakih 5 minuta provjerava postoji li novija verzija modela i reučitava je bez restarta kontejnera
+- Background daemon thread konzumira `price_update_queue`; NACK bez requeuea ako model nije dostupan
+- Cacheira predikcije u Redis (`price_prediction_<id>`, TTL 300s)
+- Ažurira `current_price` i zapisuje u `price_log` kada predviđena cijena odstupa >5 EUR
+
+### `mongo`
+MongoDB 7. Podatci pohranjeni u trajnom Docker volumenu `mongo_`.
+
+### `seed-tools`
+Opcionalni Node.js alat za ručno kreiranje MongoDB indeksa. **Nije dio normalnog pokretanja** — indeksi se automatski kreiraju u `backend/app.py` pri svakom startu. Korisno samo ako se baza ručno čisti.
+
+```bash
+# Ručno kreiranje indeksa ako je potrebno
+docker compose run --rm seed
+```
+
+### `rabbitmq`
+RabbitMQ 3.12 s management pluginom. Hostera:
+- `table_events` fanout exchange — real-time eventi rezervacija
+- `price_update_queue` trajni queue — asinkroni zahtjevi za ML cijene
+
+Docker healthcheck (`rabbitmq-diagnostics -q ping`) osigurava da ovisni servisi čekaju dok RabbitMQ ne bude potpuno spreman.
+
+### `redis`
+In-memory cache za liste stolova, event feedove i odgovore prediction servisa.
+
+### `prometheus`
+Skuplja metrike svakih 15s od backenda i Traefika.
+
+### `grafana`
+Vizualizira Prometheus metrike. Auto-provisioning dashboarda iz `grafana/provisioning/` direktorija pri pokretanju — nema potrebe za ručnom konfiguracijom.  
+Port 3000, pristupni podaci: `admin` / `admin`.
+
+---
+
+## MongoDB kolekcije
+
+| Kolekcija | Popunjava | Svrha |
+|-----------|-----------|-------|
+| `clubs` | `run_data_pipeline` | Jedan dokument po Ticketmaster venue-u; ključan po `id = "tm-<venue_id>"`. Polja: name, city, country, address, capacity, lat/lon. |
+| `events` | `run_data_pipeline` | Jedan dokument po TM eventu, vezan na venue putem `club_id`. Polja: `ticketmaster_id`, `artist_name`, `image_url`, `event_date`, `artist_listeners`, `artist_playcount`, `genre_encoded`, `base_price`, `current_price`. |
+| `tables` | `run_data_pipeline` | 20 slobodnih stolova po eventu, kreiraju se pri prvom pipeline runu. Vezani na event putem `event_id`. |
+| `reservations` | `backend` | Append-only audit log svake rezervacije stola. |
+| `users` | `backend` | Registar korisničkih imena. |
+| `tickets` | `backend` | Vlasništvo ulaznica po korisniku i eventu. |
+| `reports` | `analytics_worker` | Dnevni agregatni snimci (broj rezervacija i ulaznica). |
+| `ml_training_data` | `generate_training_data.py` | Training zapisi: stvarni Last.fm izvođači × 10 kapacitetnih razina × 11 vremenskih scenarija (~33.000 zapisa). |
+| `price_log` | `prediction_service` | Append-only log svake ML-pokrenute promjene cijene (stara → nova). |
+| `model_metadata` | `train_model.py` | Ime pobjedničkog modela, RMSE oba modela, lista featureova, veličina training skupa, timestamp. |
+
+---
+
+## HTTP API referenca
+
+### Backend (rutirano kroz Traefik na portu 80)
+
+| Metoda | Putanja | Opis |
+|--------|---------|------|
+| GET | `/api/clubs` | Lista venue-a. Opcionalni filteri: `?city=`, `?country=`. Vraća `event_count` po venue-u putem `$lookup` agregacije. |
+| POST | `/api/clubs` | Ručno ubacivanje kluba. |
+| GET | `/api/clubs/<club_id>/events` | Eventi za venue, sortirani po datumu uzlazno. |
+| GET | `/api/events` | Globalni event feed. Filteri: `?city=`, `?country=`, `?genre=`, `?q=` (full-text), `?limit=` (default 100, max 500). Redis cache 60s. |
+| GET | `/api/events/<event_id>` | Puni dokument eventa po `id` ili `ticketmaster_id`. |
+| GET | `/api/cities` | Agregirani popis gradova + broj evenata (za filter dropdown). |
+| POST | `/api/sync-events` | Ručno okida `run_data_pipeline` putem Celerya. Vraća `task_id`. |
+| GET | `/api/events/<event_id>/tables` | Stolovi za event (Redis cache, 1h TTL). |
+| POST | `/api/events/<event_id>/tables/<table_id>/reserve` | Rezervacija stola (RabbitMQ broadcast + invalidacija cachea). |
+| POST | `/api/events/<event_id>/tables/<table_id>/cancel` | Otkazivanje rezervacije (samo vlasnik, provjera vlasništva). |
+| POST | `/api/users` | Kreiranje / provjera korisnika. |
+| POST | `/api/users/<username>/buy-ticket/<event_id>` | Kupnja ulaznice. |
+| GET | `/api/users/<username>/has-ticket/<event_id>` | Provjera vlasništva ulaznice. |
+| GET | `/api/reports` | Zadnjih 10 dnevnih izvještaja. |
+| GET | `/api/events/<event_id>/pricing` | `{base_price, current_price, high_demand, ...}`. Redis cache 60s. |
+| POST | `/api/events/<event_id>/request-price-update` | Ručno šalje pricing featureove u prediction queue. |
+| GET | `/api/price-log` | Zadnjih 50 ML-pokrenenih promjena cijena. |
+| GET | `/api/model-status` | Proxy prema `prediction_service /model-info`. |
+| GET | `/metrics` | Prometheus scrape endpoint. |
+
+### Prediction Service (rutirano kroz Traefik na portu 80)
+
+| Metoda | Putanja | Opis |
+|--------|---------|------|
+| POST | `/predict-price` | Ulaz: `{artist_listeners, artist_playcount, genre_encoded, venue_capacity, days_until_event, tickets_sold_ratio, day_of_week, event_id, current_price}`. Vraća predviđenu cijenu; ažurira `price_log` i event ako je razlika >5 EUR. |
+| GET | `/model-info` | Zadnji `model_metadata` dokument. |
+| GET | `/health` | `{"status": "ok", "model_loaded": true/false}`. |
+| GET | `/metrics` | Prometheus metrike prediction servisa. |
+
+### Real-time kanal (Socket.IO)
+
+| Event | Smjer | Opis |
+|-------|-------|------|
+| `table_updated` | Server → klijent | Emitira se u sobi `event_<id>` pri svakoj rezervaciji ili otkazivanju. |
+| `price_updated` | Server → klijent | Emitira se u sobi `event_<id>` kada ML model promijeni cijenu. Payload: `{event_id, current_price, high_demand}`. |
+| `join_event` | Klijent → server | Klijent se pridružuje sobi eventa da prima ažuriranja. |
+
+---
+
+## Celery rasporednik
+
+Konfiguracija u `backend/celery_config.py`:
+
+| Naziv taska | Raspored | Opis |
+|-------------|----------|------|
+| `generate_daily_report` | Svakih 60 sekundi | Agregira broj rezervacija i ulaznica u `reports` kolekciju. |
+| `run_data_pipeline` | Jednom dnevno (86400s) | Puni dohvat Ticketmaster + Last.fm za svih 20 gradova. |
+| `run_generate_training_data` | Svake nedjelje u 3:00 UTC | Regenerira ML training skup (~33.000 zapisa). |
+| `run_train_model` | Svake nedjelje u 4:00 UTC | Trenira Random Forest i XGBoost, sprema pobjednički model. |
+
+---
+
+## Dinamičke cijene — ML pipeline
+
+### Tok podataka
+
+```
+Last.fm API (tag.gettopartists)
+        │
+        │  top 30 izvođača × 10 žanrova = ~300 izvođača
+        ▼
+generate_training_data.py
+        │
+        │  za svakog izvođača: 10 kapaciteta × 11 vremenskih scenarija
+        │  = 110 zapisa po izvođaču = ~33.000 ukupno
+        ▼
+MongoDB: ml_training_data
+        │
+        ▼
+train_model.py
+        │
+        │  80% train / 20% test split
+        │  Random Forest (100 stabala) vs XGBoost (200 stabala)
+        │  pobjeđuje niži RMSE
+        ▼
+/app/models/pricing_model.pkl   (dijeljeni Docker volumen)
+        │
+        ▼
+prediction_service/service.py
+        │
+        │  konzumira price_update_queue
+        │  poziva model.predict()
+        │  ako razlika >5 EUR → ažuriraj MongoDB + Redis + WebSocket
+        ▼
+Korisnik vidi ažuriranu cijenu u pregledniku (bez refresha)
+```
+
+### Feature vektor (7 značajki)
+
+| Feature | Izvor | Transformacija |
+|---------|-------|----------------|
+| `log_listeners` | Last.fm listeners | `log10(x + 1)` |
+| `log_playcount` | Last.fm playcount | `log10(x + 1)` |
+| `genre_encoded` | Last.fm tagovi → GENRE_MAP | 0–15 |
+| `venue_capacity` | Ticketmaster venue | cijeli broj |
+| `days_until_event` | datum eventa – danas | cijeli broj |
+| `tickets_sold_ratio` | rezervirani / ukupni stolovi | 0.0–1.0 |
+| `day_of_week` | datum eventa | 0 (pon) – 6 (ned) |
+
+### GENRE_MAP — enkodiranje žanra
+
+```python
+GENRE_MAP = {
+    "electronic": 1, "techno": 2, "house": 3, "trance": 4,
+    "drum and bass": 5, "dubstep": 6, "edm": 7, "dance": 8,
+    "pop": 9, "rock": 10, "hip-hop": 11, "jazz": 12,
+    "classical": 13, "metal": 14, "indie": 15, "other": 0,
+}
+```
+
+Elektronički žanrovi (kodovi 1–8) nose premiju od 20% u determinističkoj formuli.
+
+### Deterministička bazna formula (`pipeline_task.py`)
+
+```python
+popularity_score = min(log10(artist_listeners) / 7.0, 1.0)
+capacity_factor  = max(0.5, 1.0 - (venue_capacity / 10000) * 0.3)
+urgency_factor   = 1.3 if days <= 7 else 1.1 if days <= 30 else 1.0
+genre_factor     = 1.2 if genre_encoded in [1..8] else 1.0
+
+base  = 20 + (popularity_score * 130 * capacity_factor * genre_factor)
+price = round(base * urgency_factor, 2)
+```
+
+---
+
+## Nadzor sustava
+
+### Prometheus metrike — backend
+
+| Metrika | Tip | Opis |
+|---------|-----|------|
+| `http_requests_total{method, endpoint, status}` | Counter | Ukupan broj HTTP zahtjeva |
+| `http_request_duration_seconds{endpoint}` | Histogram | Latencija po endpointu |
+
+### Prometheus metrike — prediction_service
+
+| Metrika | Tip | Opis |
+|---------|-----|------|
+| `predictions_total` | Counter | Ukupan broj ML predikcija |
+| `price_changes_total` | Counter | Broj promjena cijena (razlika >5 EUR) |
+| `prediction_duration_seconds` | Histogram | Trajanje jedne predikcije |
+| `model_loaded` | Gauge | 1 = model učitan, 0 = model nije dostupan |
+| `cache_hits_total` | Counter | Broj Redis cache pogodaka |
+
+### Grafana dashboard
+
+Dashboard se automatski provisiona pri pokretanju iz `grafana/provisioning/`.  
+Pristup: http://localhost:3000 (`admin` / `admin`)
+
+Paneli dashboarda:
+- Predikcije po sekundi
+- Promjene cijena
+- Status ML modela (učitan / nije)
+- Prosječno trajanje predikcije
+- Cache hit rate (Redis)
+- HTTP zahtjevi prema backendu
+- Latencija backenda
+
+---
+
+## Testiranje
+
+Sveobuhvatni integracijski testovi pokrivaju sve komponente sustava:
+
+```bash
+docker compose exec backend python run_tests.py
+```
+
+Testovi obuhvaćaju:
+
+| Kategorija | Što se testira |
+|------------|----------------|
+| Unit testovi | `calculate_base_price`, `encode_genre`, `compute_days_until_event`, `compute_default_tickets_sold_ratio` |
+| MongoDB integracija | Postojanje kolekcija, indeksi, CRUD operacije |
+| Redis integracija | Cache za stolove, invalidacija |
+| RabbitMQ integracija | Objavljivanje i primanje poruka |
+| REST API | `/api/clubs`, `/api/events`, `/api/tables`, rezervacija, otkazivanje, ulaznice |
+| Prediction Service | `/predict-price`, `/health`, `/model-info` |
+| Prometheus | Scrape endpoint na backendu i prediction servisu |
+
+---
+
+## Poznata ograničenja
+
+| Ograničenje | Detalj |
+|-------------|--------|
+| Bez autentikacije | Korisničko ime pohranjuje se bez provjere u `localStorage`; nema lozinke ni JWT tokena. |
+| Bez validacije ulaza | POST endpointi ne validiraju tipove ni opsege vrijednosti. |
+| Bez rate limitinga | API je otvoren za zlouporabu. |
+| ML model bez verzioniranja | Svaki retrain prepisuje prethodne `.pkl` datoteke — nema rollbacka na stariji model. |
+| `generate_training_data.py` briše kolekciju | `db.ml_training_data.drop()` briše bez potvrde — pokretanje brišu sve prethodne training podatke. |
+| Trajanje generiranja | Generiranje training podataka traje ~30 minuta zbog rate limiting Last.fm API-ja (pauza 0.3s po izvođaču). |
