@@ -11,3 +11,14 @@ celerybeat-schedule.dat
 celerybeat-schedule.dir
 
 .env
+.env.save
+
+# Node / React / Expo
+node_modules/
+dist/
+build/
+.expo/
+*.tsbuildinfo
+
+# Uploadi (lokalni razvoj)
+backend/uploads/

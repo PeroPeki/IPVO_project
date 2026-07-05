@@ -10,7 +10,6 @@ services:
       - "--metrics.prometheus=true"
       - "--metrics.prometheus.entrypoint=metrics"
       - "--entrypoints.metrics.address=:8082"
-
     ports:
       - "80:80"
       - "8080:8080"
@@ -19,111 +18,62 @@ services:
     networks:
       - app-net
 
-  web1:
-    container_name: web1
-    build: ./frontend
-    volumes:
-      - ./frontend:/usr/share/nginx/html:ro
-    labels:
-      - "traefik.enable=true"
-      # Hvatamo sve na localhost, ali s manjim prioritetom od API-ja
-      - 'traefik.http.routers.web.rule=Host("localhost") && PathPrefix("/")'
-      - "traefik.http.routers.web.entrypoints=web"
-      - "traefik.http.services.web.loadbalancer.server.port=80"
-    networks:
-      - app-net
-
-  web2:
-    container_name: web2
-    build: ./frontend
-    volumes:
-      - ./frontend:/usr/share/nginx/html:ro
-    labels:
-      - "traefik.enable=true"
-      # web2 dijeli isti router/servis kao web1 za load balancing
-      - "traefik.http.services.web.loadbalancer.server.port=80"
-    networks:
-      - app-net
-
   backend:
     build: ./backend
+    container_name: backend
     volumes:
       - ./backend:/app
-      - models:/app/models
-    environment:
-      - FLASK_ENV=development
-      - FLASK_DEBUG=1
-      - MONGO_URI=mongodb://mongo:27017
-      - RABBITMQ_URI=amqp://guest:guest@rabbitmq:5672/
-      - TICKETMASTER_API_KEY=${TICKETMASTER_API_KEY:-}
-      - LASTFM_API_KEY=${LASTFM_API_KEY:-}
-    depends_on:
-      mongo:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+      - uploads:/app/uploads
     labels:
       - "traefik.enable=true"
-      # Hvatamo API, WebSocket i /metrics promet
+      # API + Socket.IO + Prometheus metrike
       - 'traefik.http.routers.api.rule=Host("localhost") && (PathPrefix("/api") || PathPrefix("/socket.io") || PathPrefix("/metrics"))'
-      # BITNO: Dajemo veći prioritet da frontend ne "proguta" ove zahtjeve
       - "traefik.http.routers.api.priority=100"
       - "traefik.http.routers.api.entrypoints=web"
       - "traefik.http.services.api.loadbalancer.server.port=5000"
-      # Sticky sessions za WebSockete
-      - "traefik.http.services.api.loadbalancer.sticky.cookie=true"
-      - "traefik.http.services.api.loadbalancer.sticky.cookie.name=backend_sticky"
+    environment:
+      - MONGO_URI=mongodb://mongo:27017
+      - REDIS_HOST=redis
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
+      - STRIPE_PUBLISHABLE_KEY=${STRIPE_PUBLISHABLE_KEY:-}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-}
+      - JWT_SECRET=${JWT_SECRET:-dev-secret-change-me}
+      - CLOUDINARY_URL=${CLOUDINARY_URL:-}
+      - SENDGRID_API_KEY=${SENDGRID_API_KEY:-}
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - app-net
+
+  admin:
+    build: ./admin
+    container_name: admin
+    labels:
+      - "traefik.enable=true"
+      - 'traefik.http.routers.admin.rule=Host("admin.localhost")'
+      - "traefik.http.routers.admin.entrypoints=web"
+      - "traefik.http.services.admin.loadbalancer.server.port=80"
     networks:
       - app-net
 
   analytics_worker:
     build: ./backend
-    # -A tasks: tasks
-    # worker: pokreni radnika
-    # --beat: pokreni i sat (timer) unutar istog kontejnera
-    # --loglevel=info: da vidimo što radi
+    container_name: analytics_worker
     command: celery -A tasks worker --beat --loglevel=info
     volumes:
       - ./backend:/app
-      - models:/app/models
     environment:
       - MONGO_URI=mongodb://mongo:27017
-      - RABBITMQ_URI=amqp://guest:guest@rabbitmq:5672/
-      - TICKETMASTER_API_KEY=${TICKETMASTER_API_KEY:-}
-      - LASTFM_API_KEY=${LASTFM_API_KEY:-}
+      - REDIS_HOST=redis
+      - SENDGRID_API_KEY=${SENDGRID_API_KEY:-}
     depends_on:
       mongo:
         condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
       redis:
         condition: service_healthy
-    networks:
-      - app-net
-
-  prediction_service:
-    build: ./prediction_service
-    container_name: prediction_service
-    volumes:
-      - models:/app/models
-    environment:
-      - MONGO_URI=mongodb://mongo:27017
-      - RABBITMQ_URI=amqp://guest:guest@rabbitmq:5672/
-    depends_on:
-      mongo:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    labels:
-      - "traefik.enable=true"
-      - 'traefik.http.routers.predict.rule=Host("localhost") && (PathPrefix("/predict-price") || PathPrefix("/model-info"))'
-      - "traefik.http.routers.predict.priority=200"
-      - "traefik.http.routers.predict.entrypoints=web"
-      - "traefik.http.services.predict.loadbalancer.server.port=6000"
     networks:
       - app-net
 
@@ -134,27 +84,9 @@ services:
     ports:
       - "27017:27017"
     volumes:
-     - mongo_:/data/db
+      - mongo_data:/data/db
     healthcheck:
       test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - app-net
-
-  rabbitmq:
-    image: rabbitmq:3.12-management-alpine
-    container_name: rabbitmq
-    restart: always
-    ports:
-      - "5672:5672"   # Glavni port
-      - "15672:15672" # Management UI
-    environment:
-      RABBITMQ_DEFAULT_USER: guest
-      RABBITMQ_DEFAULT_PASS: guest
-    healthcheck:
-      test: rabbitmq-diagnostics -q ping
       interval: 10s
       timeout: 5s
       retries: 5
@@ -188,7 +120,7 @@ services:
     image: grafana/grafana:10.4.1
     container_name: grafana
     ports:
-      - "3000:3000"
+      - "3001:3000"
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin
@@ -199,9 +131,10 @@ services:
     networks:
       - app-net
 
-networks:
-  app-net: {}
-
 volumes:
-  mongo_: {}
-  models: {}
+  mongo_data: {}
+  uploads: {}
+
+networks:
+  app-net:
+    driver: bridge

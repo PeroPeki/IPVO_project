@@ -1,0 +1,29 @@
+{
+  "expo": {
+    "name": "NightClub Manager",
+    "slug": "nightclub-manager",
+    "version": "2.0.0",
+    "scheme": "nightclub",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0A0010",
+    "splash": {
+      "backgroundColor": "#0A0010"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "hr.nightclubmanager.app"
+    },
+    "android": {
+      "package": "hr.nightclubmanager.app"
+    },
+    "plugins": [
+      "expo-router",
+      "@stripe/stripe-react-native",
+      "expo-secure-store"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

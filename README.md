@@ -1,130 +1,93 @@
-# NightClub Manager
+# NightClub Manager v2
 
-> Distribuirana platforma za rezervaciju stolova u noćnim klubovima s dinamičkim određivanjem cijena temeljenim na strojnom učenju — izrađena u četiri faze za kolegij *Infrastruktura za velike podatke (IPVO)*.
+> Platforma za noćne klubove u Hrvatskoj — kupnja ulaznica, rezervacija stolova s
+> depozitom, naručivanje pića za stol i alati za osoblje. MVP fokus: **Zrće (Novalja)**.
 
 [![Stack](https://img.shields.io/badge/stack-Docker%20Compose-2496ED)](https://docs.docker.com/compose/)
 [![Backend](https://img.shields.io/badge/backend-Flask%203%20%7C%20Python%203-3776AB)](https://flask.palletsprojects.com/)
 [![Database](https://img.shields.io/badge/database-MongoDB%207-47A248)](https://www.mongodb.com/)
-[![Broker](https://img.shields.io/badge/broker-RabbitMQ%203.12-FF6600)](https://www.rabbitmq.com/)
-[![Cache](https://img.shields.io/badge/cache-Redis-DC382D)](https://redis.io/)
-[![ML](https://img.shields.io/badge/ML-XGBoost%20%2F%20scikit--learn-EE4C2C)](https://xgboost.readthedocs.io/)
-[![Monitoring](https://img.shields.io/badge/monitoring-Prometheus%20%2B%20Grafana-E6522C)](https://grafana.com/)
-
----
-
-## Sadržaj
-
-1. [Što sustav radi](#što-sustav-radi)
-2. [Arhitektura sustava](#arhitektura-sustava)
-3. [Faze razvoja](#faze-razvoja)
-4. [Tehnološki stack](#tehnološki-stack)
-5. [Struktura repozitorija](#struktura-repozitorija)
-6. [Brzi start](#brzi-start)
-7. [Varijable okoline](#varijable-okoline)
-8. [Servisni katalog](#servisni-katalog)
-9. [MongoDB kolekcije](#mongodb-kolekcije)
-10. [HTTP API referenca](#http-api-referenca)
-11. [Celery rasporednik](#celery-rasporednik)
-12. [Dinamičke cijene — ML pipeline](#dinamičke-cijene--ml-pipeline)
-13. [Nadzor sustava](#nadzor-sustava)
-14. [Testiranje](#testiranje)
-15. [Poznata ograničenja](#poznata-ograničenja)
+[![Realtime](https://img.shields.io/badge/realtime-Redis%20Pub%2FSub%20%2B%20Socket.IO-DC382D)](https://redis.io/)
+[![Payments](https://img.shields.io/badge/payments-Stripe-635BFF)](https://stripe.com/)
+[![Mobile](https://img.shields.io/badge/mobile-React%20Native%20%2B%20Expo-61DAFB)](https://expo.dev/)
+[![Admin](https://img.shields.io/badge/admin-React%20%2B%20Vite-646CFF)](https://vitejs.dev/)
 
 ---
 
 ## Što sustav radi
 
-Platforma korisnicima omogućuje pregled stvarnih glazbenih događaja s Ticketmastera, kupnju ulaznica i rezervaciju stolova u realnom vremenu. Iza korisničkog sučelja nalaze se:
-
-| Mogućnost | Opis |
-|-----------|------|
-| **Stvarni glazbeni eventi** | Svi klubovi i eventi dohvaćaju se s Ticketmaster Discovery API-ja za 20 gradova diljem svijeta. Nema hardkodiranih podataka. |
-| **Pregled i rezervacija** | Korisnik se prijavljuje korisničkim imenom, pregledava venue-e i nadolazeće evente, kupuje ulaznicu i rezervira slobodni stol. |
-| **Ažuriranje u realnom vremenu** | Svaka rezervacija ili otkazivanje propagira se svim spojenim preglednicima unutar milisekundi putem RabbitMQ → Socket.IO. |
-| **Horizontalna skalabilnost** | Dvije NGINX replike servira frontend iza Traefik load balancera; Flask backend je load-balanced sa sticky kolačićima za WebSocket afinitet. |
-| **Brze čitanja** | Često zahtijevane liste stolova i event feed cachiraju se u Redisu s determinističkom invalidacijom pri svakom zapisu. |
-| **Periodička analitika** | Celery worker s ugrađenim beat raspoređivačem agregira metrike rezervacija i ulaznica u kolekciju `reports`. |
-| **Automatski dohvat podataka** | Raspoređeni pipeline povlači nadolazeće glazbene evente za 20 globalnih gradova i obogaćuje svakog izvođača Last.fm popularnosti signalima. Automatski se okida pri prvom pokretanju ako je baza prazna. |
-| **Dinamičke cijene s ML-om** | Regresijski model (Random Forest vs XGBoost, pobjeđuje niži RMSE) predviđa optimalnu cijenu stola iz popularnosti izvođača, kapaciteta, hitnosti, žanra i popunjenosti. |
-| **Asinkrono ažuriranje cijena** | Backend objavljuje feature payload u trajni RabbitMQ red; namjenski prediction mikroservis ga konzumira, pokreće inferenciju, zapisuje promjenu i ažurira pogođeni event. |
-| **End-to-end nadzor** | Vlastite metrike backenda i metrike edge proxija (Traefik) skuplja Prometheus i vizualizira u Grafani. |
-| **Tjedni automatski retraining** | Svake nedjelje u 3:00 Celery Beat automatski regenerira training podatke i trenira novi model. |
+| Uloga | Mogućnosti |
+|-------|-----------|
+| **Gost (mobilna app)** | Registracija/prijava (email, Google, Facebook), pregled klubova i evenata, kupnja ulaznica (Stripe — kartice, Apple Pay, Google Pay), QR karta, rezervacija stola na interaktivnoj SVG mapi s real-time dostupnošću, VIP depozit koji se pretvara u kupon za piće, naručivanje pića za stol |
+| **Hostesa (mobilna app)** | Prijava emailom + PIN-om, pretraga gostiju po prezimenu, check-in karata i rezervacija, live statistike ulaska |
+| **Konobar (mobilna app)** | Prijava emailom + PIN-om, real-time narudžbe svoje sekcije, prihvat i dostava, naplata (Stripe ili gotovina) |
+| **Admin kluba (web)** | CRUD evenata s tipovima karata, floor map editor (upload tlocrta + postavljanje stolova klikom + sekcije), meni pića, osoblje i dodjela sekcija, live dashboard eventa, izvještaji |
+| **Superadmin (web)** | Kreiranje klubova i njihovih admina, sve što i admin — za bilo koji klub |
 
 ---
 
-## Arhitektura sustava
+## Arhitektura
 
 ```
-                  ┌─────────────────┐
-                  │   Browser (UI)  │
-                  └────────┬────────┘
-                           │ HTTP / WebSocket
-                           ▼
-                  ┌─────────────────┐         ┌──────────────┐
-                  │  Traefik :80    │◄────────│  Prometheus  │
-                  │ (load balancer) │  /metrics│   :9090      │
-                  └─┬───────┬───────┘         └──────┬───────┘
-                    │       │                        │
-          ┌─────────┘       └─────────┐              ▼
-          ▼                           ▼       ┌──────────────┐
-   ┌────────────┐              ┌────────────┐ │   Grafana    │
-   │ web1/web2  │              │  backend   │ │    :3000     │
-   │  (NGINX)   │              │  (Flask +  │ └──────────────┘
-   │ static UI  │              │ Socket.IO) │
-   └────────────┘              └─┬───┬───┬──┘
-                                 │   │   │
-        ┌────────────────────────┘   │   └───────────────────┐
-        ▼                            ▼                       ▼
- ┌─────────────┐             ┌─────────────┐          ┌─────────────┐
- │   MongoDB   │             │    Redis    │          │  RabbitMQ   │
- │   :27017    │             │   :6379     │          │  :5672      │
- └─────▲───────┘             └─────────────┘          └──┬──────▲───┘
-       │                                                  │      │
- ┌─────┴──────────┐                               ┌───────▼──────┴────┐
- │ analytics_     │                               │ prediction_       │
- │ worker         │                               │ service           │
- │ (Celery +      │                               │ (Flask + ML +     │
- │  Beat)         │                               │  RabbitMQ         │
- └────────────────┘                               │  consumer)        │
-                                                  └───────────────────┘
+   ┌──────────────────┐    ┌───────────────────┐
+   │  Mobilna app     │    │  Admin panel      │
+   │  (React Native + │    │  (React + Vite)   │
+   │   Expo Router)   │    │  admin.localhost  │
+   └───────┬──────────┘    └────────┬──────────┘
+           │ HTTP / WebSocket       │
+           ▼                        ▼
+   ┌──────────────────────────────────────────┐      ┌──────────────┐
+   │              Traefik :80                 │◄─────│  Prometheus  │
+   │  /api /socket.io /metrics → backend      │      │    :9090     │
+   │  admin.localhost → admin (NGINX)         │      └──────┬───────┘
+   └───────────────────┬──────────────────────┘             ▼
+                       ▼                             ┌──────────────┐
+   ┌──────────────────────────────────────────┐      │   Grafana    │
+   │   backend (Flask + Socket.IO + JWT)      │      │    :3001     │
+   │   Stripe PaymentIntents + webhook        │      └──────────────┘
+   └──────┬──────────────────┬────────────────┘
+          │                  │
+          ▼                  ▼
+   ┌─────────────┐    ┌─────────────────────────┐
+   │   MongoDB   │    │   Redis                 │
+   │   :27017    │    │   db0: Pub/Sub + cache  │
+   └─────▲───────┘    │   db1/db2: Celery       │
+         │            └───────────▲─────────────┘
+   ┌─────┴────────────────────────┴─────┐
+   │  analytics_worker (Celery + Beat)  │
+   │  dnevni izvještaji + podsjetnici   │
+   └────────────────────────────────────┘
 ```
 
-**Traefik routing pravila** (sve na `Host(localhost)`):
-
-| Putanja | Cilj | Prioritet |
-|---------|------|-----------|
-| `/api/*`, `/socket.io/*`, `/metrics` | `backend:5000` | 100 |
-| `/predict-price`, `/model-info` | `prediction_service:6000` | 200 |
-| Sve ostalo | `web1` / `web2` round-robin | nizak |
-
----
-
-## Faze razvoja
-
-| Faza | Tema | Uvedene komponente |
-|------|------|--------------------|
-| **1** | Core CRUD i horizontalno skaliranje | Flask backend, MongoDB, Traefik load balancer, dvije NGINX frontend replike |
-| **2** | Ažuriranje u realnom vremenu i periodička analitika | RabbitMQ fanout exchange, Socket.IO, Celery worker s ugrađenim beatom, task za dnevni izvještaj |
-| **3** | Optimizacija čitanja i nadzor | Redis read-through cache s invalidacijom, Prometheus instrumentacija, Grafana dashboardi |
-| **4** | Globalni živi podaci, ML cijene, bug ispravci | Ticketmaster + Last.fm pipeline (20 gradova), auto-bootstrap, dinamički klubovi iz venue-a, deterministički generator training podataka, Random Forest vs XGBoost trener, namjenski `prediction_service` mikroservis, bogat frontend (slike, filtriranje, auto-refresh, dinamičke cijene), tjedni automatski retraining |
+**Real-time tok:** backend objavljuje na Redis Pub/Sub kanale
+(`table_updates`, `order_updates`) → listener dretva prosljeđuje u
+Socket.IO sobe: `event_{id}` (mapa stolova), `waiter_{id}` (konobar),
+`bar_{event_id}` (barski zaslon). RabbitMQ je u potpunosti uklonjen.
 
 ---
 
 ## Tehnološki stack
 
-| Sloj | Tehnologija | Verzija |
-|------|-------------|---------|
-| Reverse proxy / load balancer | Traefik (Docker provider, Prometheus exporter) | 2.11 |
-| Frontend | Statički HTML/CSS/JS, dvije NGINX replike | nginx:alpine |
-| Backend API | Python, Flask, Flask-SocketIO, gevent | Flask 3, Python 3 |
-| Asinkrona obrada | Celery worker + beat u jednom kontejneru | Celery 5 |
-| Baza podataka | MongoDB | 7.0 |
-| Message broker | RabbitMQ (management plugin) | 3.12 |
-| Cache | Redis | alpine |
-| Nadzor | Prometheus + Grafana (auto-provisioning) | 2.51 / 10.4 |
-| Strojno učenje | scikit-learn (Random Forest), XGBoost, joblib, pandas | latest |
-| Živi podaci | Ticketmaster Discovery API, Last.fm API (pylast) | — |
-| Runtime | Docker Compose | — |
+| Sloj | Tehnologija |
+|------|-------------|
+| Backend API | Flask 3, flask-jwt-extended, Flask-SocketIO (gevent) |
+| Baza | MongoDB 7 |
+| Real-time + cache + broker | Redis (Pub/Sub, Celery broker/backend) |
+| Plaćanja | Stripe (PaymentIntents, Payment Sheet, webhookovi, refundi) |
+| Periodički zadatci | Celery + Celery Beat |
+| Mobilna aplikacija | React Native + Expo (Expo Router, NativeWind, Zustand, @stripe/stripe-react-native, react-native-svg, socket.io-client) |
+| Admin panel | React 18 + Vite + TypeScript, react-router |
+| Edge / LB | Traefik 2.11 |
+| Nadzor | Prometheus + Grafana (auto-provisioning) |
+| Slike | Cloudinary (opcionalno; fallback lokalni disk) |
+| Email | SendGrid (opcionalno; fallback log) |
+
+### Paleta boja (tamna tema, bez light modea)
+
+```
+bgDark  #0A0010 · bgCard  #1A0030 · accent1 #CC00FF · accent2 #8B00CC
+accent3 #4A0080 · text    #F0E6FF · muted   #9B7BC0
+success #34C759 · warning #F4B860 · error   #FF3B30
+```
 
 ---
 
@@ -132,439 +95,260 @@ Platforma korisnicima omogućuje pregled stvarnih glazbenih događaja s Ticketma
 
 ```
 IPVO_projekt/
-├── docker-compose.yml               # Orkestracija svih servisa
-├── .env                             # Lokalni API ključevi (git-ignored)
-├── .env.example                     # Predložak varijabli okoline
-├── README.md
-│
-├── frontend/
-│   ├── Dockerfile
-│   ├── index.html                   # Ekran za prijavu
-│   ├── clubs.html                   # Preglednik venue-a s filterima
-│   ├── events.html                  # Feed evenata sa slikama i cijenama
-│   ├── buy-ticket.html              # Kupnja ulaznice s detaljima eventa
-│   ├── tables.html                  # Real-time grid rezervacije stolova
-│   └── style.css
-│
+├── docker-compose.yml
+├── .env.example
 ├── backend/
-│   ├── Dockerfile
-│   ├── requirements.txt
-│   ├── app.py                       # Flask + Socket.IO core + sve REST rute
-│   ├── tasks.py                     # Celery taskovi (pipeline, dnevni izvještaj, retraining)
-│   ├── celery_config.py             # Broker URL + beat raspored
-│   ├── pipeline_task.py             # TM/Last.fm helperi + formula za cijene
-│   ├── generate_training_data.py    # Generator training skupa (Last.fm izvođači)
-│   ├── train_model.py               # RF vs XGBoost trainer
-│   ├── run_tests.py                 # Sveobuhvatni integracijski testovi
-│   └── models/                      # Mount točka za dijeljeni models volumen
-│
-├── prediction_service/
-│   ├── Dockerfile
-│   ├── requirements.txt
-│   └── service.py                   # ML inferencija + RabbitMQ consumer
-│
-├── seed-tools/
-│   ├── Dockerfile
-│   ├── package.json
-│   └── seed.js                      # Opcionalni alat za ručno kreiranje MongoDB indeksa
-│
-├── mongo-init/
-│   └── seed.js                      # Zastarjelo — samo dokumentacijski komentar
-│
-├── prometheus/
-│   └── prometheus.yml               # Konfiguracija scrapeanja (15s interval)
-│
-├── grafana/
-│   └── provisioning/                # Auto-provisioning dashboarda pri pokretanju
-│       ├── datasources/
-│       └── dashboards/
-│
-└── monitoring/
-    └── prometheus.yml               # Alternativna scrape konfiguracija
+│   ├── app.py                  # Flask + Socket.IO + JWT + webhook + metrike
+│   ├── db.py                   # Mongo konekcija + indeksi (v2 shema)
+│   ├── auth_utils.py           # JWT role, hash lozinki, serijalizacija
+│   ├── realtime.py             # Redis Pub/Sub → Socket.IO
+│   ├── stripe_service.py       # PaymentIntenti (karte, depoziti, piće)
+│   ├── payments.py             # Potvrde plaćanja (webhook logika)
+│   ├── reservation_service.py  # Rezervacije, depozit, kupon, check-in
+│   ├── order_service.py        # Narudžbe pića + dodjela konobara
+│   ├── email_service.py        # SendGrid / dev log
+│   ├── upload_service.py       # Cloudinary / lokalni disk
+│   ├── tasks.py                # Celery: izvještaji + podsjetnici
+│   ├── celery_config.py        # Redis broker + beat raspored
+│   ├── migrate_v2.py           # Migracija: briše v1 kolekcije
+│   ├── seed_superadmin.py      # Inicijalni superadmin
+│   ├── run_tests.py            # Integracijski testovi
+│   └── routes/                 # Blueprintovi: auth, clubs, events, tickets,
+│                               # hostess, floor_maps, reservations, menu,
+│                               # orders, admin
+├── mobile/                     # Expo React Native aplikacija
+│   ├── app/                    # Expo Router ekrani
+│   │   ├── (auth)/             # login, register, oauth
+│   │   ├── (tabs)/             # home, explore, tickets, profile
+│   │   ├── club/[slug].tsx     # detalji kluba
+│   │   ├── event/[id].tsx      # detalji eventa + kupnja karte
+│   │   ├── reservation/        # SVG mapa + potvrda/depozit
+│   │   ├── order/              # meni → košarica → naplata
+│   │   └── staff/              # hostess.tsx, waiter.tsx
+│   ├── components/             # FloorMap, TableMarker, PaymentSheet…
+│   ├── hooks/  services/  store/  constants/
+├── admin/                      # React admin panel (Vite)
+│   └── src/pages/              # Dashboard, Clubs, Events, FloorMapEditor,
+│                               # Staff, Menu, Reservations, LiveDashboard, Reports
+├── prometheus/prometheus.yml
+└── grafana/provisioning/       # Datasource + dashboard auto-provisioning
 ```
 
 ---
 
 ## Brzi start
 
-### Preduvjeti
-
-- Docker i Docker Compose instalirani i pokrenuti
-- Ticketmaster API ključ — besplatna registracija na [developer.ticketmaster.com](https://developer.ticketmaster.com/)
-- Last.fm API ključ — besplatna registracija na [last.fm/api](https://www.last.fm/api)
-
-### 1. Priprema API ključeva
+### 1. Priprema okoline
 
 ```bash
 cp .env.example .env
-# Otvori .env i upiši svoje ključeve:
-# TICKETMASTER_API_KEY=tvoj_kljuc
-# LASTFM_API_KEY=tvoj_kljuc
+# Upiši Stripe test ključeve (https://dashboard.stripe.com/test/apikeys)
+# i generiraj JWT tajnu: openssl rand -hex 32
 ```
 
-### 2. Pokretanje sustava
+### 2. Pokretanje
 
 ```bash
 docker compose up -d --build
 ```
 
-Pričekaj ~30 sekundi da se svi kontejneri podignu. Provjeri status:
+### 3. Inicijalni podaci
 
 ```bash
-docker compose ps
+# Ako nadograđuješ s v1 — očisti stare kolekcije:
+docker compose exec backend python migrate_v2.py
+
+# Kreiraj superadmina (default: superadmin / superadmin123):
+docker compose exec backend python seed_superadmin.py
 ```
 
-Svi servisi trebaju biti `running` ili `healthy`.
+### 4. Pristup
 
-### 3. Automatski dohvat podataka
-
-Ako je baza prazna, backend automatski okida pipeline pri prvom startu.
-Prati napredak:
-
-```bash
-docker compose logs analytics_worker -f --tail=60
-# Vidjet ćeš: "Obrada grada: London, GB" ... "Pipeline gotov"
-# Frontend se automatski osvježava čim podaci stignu (~2–5 min)
-```
-
-Ili ručno pokreni pipeline odmah:
-
-```bash
-curl -X POST http://localhost/api/sync-events
-```
-
-### 4. Pristup aplikaciji
-
-| URL | Opis |
-|-----|------|
-| http://localhost/ | Frontend aplikacija |
-| http://localhost:3000/ | Grafana (`admin` / `admin`) |
-| http://localhost:15672/ | RabbitMQ Management (`guest` / `guest`) |
+| URL | Servis |
+|-----|--------|
+| http://localhost/api/health | Backend health check |
+| http://admin.localhost/ | Admin panel (superadmin / superadmin123) |
 | http://localhost:8080/ | Traefik dashboard |
 | http://localhost:9090/ | Prometheus |
+| http://localhost:3001/ | Grafana (`admin` / `admin`) |
 
-### 5. ML model za dinamičke cijene (opcionalno)
-
-ML model se automatski trenira svake nedjelje u 4:00 (Celery Beat). Za ručno pokretanje:
-
-```bash
-# Korak 1: Generiraj training podatke (~30 min, poziva Last.fm API)
-docker compose exec analytics_worker python generate_training_data.py
-# Dohvaća top 30 izvođača za 10 žanrova → ~33.000 training zapisa u MongoDB
-
-# Korak 2: Treniraj model (Random Forest vs XGBoost, spremi bolji)
-docker compose exec analytics_worker python train_model.py
-# Ispisuje RMSE oba modela i sprema pobjednika u /app/models/
-
-# Korak 3: Provjeri status modela
-curl http://localhost/api/model-status
-```
-
-### Zaustavljanje
+### 5. Mobilna aplikacija (Expo)
 
 ```bash
-# Zaustavi, ali zadrži podatke
-docker compose down
-
-# Zaustavi i obriši sve podatke (baza, modeli)
-docker compose down -v
+cd mobile
+npm install
+# U .env ili shellu postavi IP računala (Expo Go ne vidi "localhost"):
+EXPO_PUBLIC_API_URL=http://192.168.x.x \
+EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_test_... \
+npx expo start
 ```
+
+### 6. Stripe webhook (lokalni razvoj)
+
+```bash
+stripe listen --forward-to localhost/api/webhooks/stripe
+# whsec_... upiši u .env kao STRIPE_WEBHOOK_SECRET pa restartaj backend
+```
+
+Bez webhooka mobilna app poziva `/api/tickets/confirm` kao fallback potvrdu.
 
 ---
 
 ## Varijable okoline
 
-Kopiraj `.env.example` u `.env` i popuni vrijednosti:
-
 | Varijabla | Opis | Obavezno |
 |-----------|------|----------|
-| `TICKETMASTER_API_KEY` | Ticketmaster Discovery API ključ | Da |
-| `LASTFM_API_KEY` | Last.fm API ključ | Da |
-
-Bez ovih ključeva pipeline preskače dohvat podataka i baza ostaje prazna.
-
----
-
-## Servisni katalog
-
-Svi servisi rade na dijeljenom Docker `app-net` mreži.
-
-### `traefik`
-Edge reverse proxy i load balancer. Port 80 za promet, 8080 za dashboard, 8082 za Prometheus metrike. Routing pravila deklarirana su putem Docker labela.
-
-### `web1` / `web2`
-Dvije NGINX instance koje servira statički frontend u round-robin načinu. Bez stanja — čitaju datoteke s read-only bind mounta.
-
-### `backend`
-Flask + Socket.IO core. Odgovornosti:
-- REST API pod `/api/*`
-- Socket.IO real-time kanal pod `/socket.io/*`
-- RabbitMQ **producer** za `table_events` fanout exchange (rezervacije/otkazivanja)
-- RabbitMQ **consumer thread** koji re-broadcastira na Socket.IO klijente u sobi eventa
-- RabbitMQ **producer** za `price_update_queue` (asinkroni zahtjevi za cijene)
-- Redis read-through cache za stolove (`tables_list_<id>`, 1h TTL) i event feed (60s TTL)
-- Prometheus `/metrics` endpoint
-- **Startup bootstrap thread**: automatski okida `run_data_pipeline` ako je kolekcija `events` prazna
-
-### `analytics_worker`
-Drugi Python kontejner iz iste backend slike, pokreće `celery -A tasks worker --beat`. Izvršava:
-- `generate_daily_report` — agregira metrike u `reports` svakih 60 sekundi
-- `run_data_pipeline` — jednom dnevno dohvaća 20 globalnih gradova, obogaćuje s Last.fm, upsertira klubove/evente/stolove u MongoDB, invalidira Redis cache
-- `run_generate_training_data` — svake nedjelje u 3:00 regenerira ML training skup
-- `run_train_model` — svake nedjelje u 4:00 trenira i sprema novi ML model
-
-### `prediction_service`
-Namjenski Flask mikroservis koji posjeduje ML model:
-- Učitava `pricing_model.pkl` i `feature_cols.pkl` s dijeljenog `models` volumena
-- Radi u degradiranom modu (HTTP 503) ako model još nije treniran
-- Background daemon thread svakih 5 minuta provjerava postoji li novija verzija modela i reučitava je bez restarta kontejnera
-- Background daemon thread konzumira `price_update_queue`; NACK bez requeuea ako model nije dostupan
-- Cacheira predikcije u Redis (`price_prediction_<id>`, TTL 300s)
-- Ažurira `current_price` i zapisuje u `price_log` kada predviđena cijena odstupa >5 EUR
-
-### `mongo`
-MongoDB 7. Podatci pohranjeni u trajnom Docker volumenu `mongo_`.
-
-### `seed-tools`
-Opcionalni Node.js alat za ručno kreiranje MongoDB indeksa. **Nije dio normalnog pokretanja** — indeksi se automatski kreiraju u `backend/app.py` pri svakom startu. Korisno samo ako se baza ručno čisti.
-
-```bash
-# Ručno kreiranje indeksa ako je potrebno
-docker compose run --rm seed
-```
-
-### `rabbitmq`
-RabbitMQ 3.12 s management pluginom. Hostera:
-- `table_events` fanout exchange — real-time eventi rezervacija
-- `price_update_queue` trajni queue — asinkroni zahtjevi za ML cijene
-
-Docker healthcheck (`rabbitmq-diagnostics -q ping`) osigurava da ovisni servisi čekaju dok RabbitMQ ne bude potpuno spreman.
-
-### `redis`
-In-memory cache za liste stolova, event feedove i odgovore prediction servisa.
-
-### `prometheus`
-Skuplja metrike svakih 15s od backenda i Traefika.
-
-### `grafana`
-Vizualizira Prometheus metrike. Auto-provisioning dashboarda iz `grafana/provisioning/` direktorija pri pokretanju — nema potrebe za ručnom konfiguracijom.  
-Port 3000, pristupni podaci: `admin` / `admin`.
+| `STRIPE_SECRET_KEY` | Stripe tajni ključ (`sk_test_...`) | Da (za plaćanja) |
+| `STRIPE_PUBLISHABLE_KEY` | Stripe javni ključ | Da (za plaćanja) |
+| `STRIPE_WEBHOOK_SECRET` | Potpis webhooka (`whsec_...`) | Za webhookove |
+| `JWT_SECRET` | Tajna za potpisivanje JWT tokena | Da |
+| `CLOUDINARY_URL` | Cloudinary za slike | Ne (fallback: disk) |
+| `SENDGRID_API_KEY` | SendGrid za emailove | Ne (fallback: log) |
 
 ---
 
-## MongoDB kolekcije
+## MongoDB kolekcije (v2 shema)
 
-| Kolekcija | Popunjava | Svrha |
-|-----------|-----------|-------|
-| `clubs` | `run_data_pipeline` | Jedan dokument po Ticketmaster venue-u; ključan po `id = "tm-<venue_id>"`. Polja: name, city, country, address, capacity, lat/lon. |
-| `events` | `run_data_pipeline` | Jedan dokument po TM eventu, vezan na venue putem `club_id`. Polja: `ticketmaster_id`, `artist_name`, `image_url`, `event_date`, `artist_listeners`, `artist_playcount`, `genre_encoded`, `base_price`, `current_price`. |
-| `tables` | `run_data_pipeline` | 20 slobodnih stolova po eventu, kreiraju se pri prvom pipeline runu. Vezani na event putem `event_id`. |
-| `reservations` | `backend` | Append-only audit log svake rezervacije stola. |
-| `users` | `backend` | Registar korisničkih imena. |
-| `tickets` | `backend` | Vlasništvo ulaznica po korisniku i eventu. |
-| `reports` | `analytics_worker` | Dnevni agregatni snimci (broj rezervacija i ulaznica). |
-| `ml_training_data` | `generate_training_data.py` | Training zapisi: stvarni Last.fm izvođači × 10 kapacitetnih razina × 11 vremenskih scenarija (~33.000 zapisa). |
-| `price_log` | `prediction_service` | Append-only log svake ML-pokrenute promjene cijene (stara → nova). |
-| `model_metadata` | `train_model.py` | Ime pobjedničkog modela, RMSE oba modela, lista featureova, veličina training skupa, timestamp. |
+| Kolekcija | Svrha | Ključni indeksi |
+|-----------|-------|-----------------|
+| `superadmins` | Superadmin računi | `username` (unique) |
+| `clubs` | Klubovi (lokacija, kapacitet, galerija, socijalne mreže) | `slug` (unique), `location.city`, `is_active` |
+| `club_admins` | Admini klubova | `email` (unique) |
+| `hostesses` / `waiters` | Osoblje (PIN prijava; konobari imaju `assigned_sections`) | `email` (unique), `club_id` |
+| `users` | Korisnici (email/OAuth, Stripe customer) | `email` (unique), `auth_provider_id` |
+| `events` | Eventi s ugniježđenim `ticket_types` i `lineup` | `club_id`, `date`, `is_published` |
+| `tickets` | Karte s QR kodom (UUID v4) i Stripe PI | `user_id`, `event_id`, `qr_code` (unique) |
+| `floor_maps` | Tlocrt kluba: stolovi (% koordinate) + sekcije | `club_id` |
+| `table_reservations` | Rezervacije: statusi `pending/confirmed/cancelled/checked_in/no_show`, depozit, kupon | partial unique `(event_id, table_id)` za aktivne |
+| `menus` | Meni pića: kategorije → stavke | `club_id` |
+| `drink_orders` | Narudžbe: `placed/accepted/preparing/delivered/cancelled` | `event_id`, `waiter_id`, `order_status` |
+| `reports` | Dnevni agregati po klubu (karte/rezervacije/piće/prihodi) | `club_id + date` |
+
+Atomnost rezervacija: partial unique indeks na `(event_id, table_id)` s
+filterom `active_hold: true` sprječava dvostruku rezervaciju istog stola
+čak i pri istovremenim zahtjevima.
 
 ---
 
-## HTTP API referenca
+## HTTP API referenca (sažetak)
 
-### Backend (rutirano kroz Traefik na portu 80)
+### Autentikacija `/api/auth/`
+`POST register` · `POST login` · `POST google` · `POST facebook` ·
+`POST refresh` · `POST admin/login` · `POST staff/login` (email + PIN)
 
-| Metoda | Putanja | Opis |
-|--------|---------|------|
-| GET | `/api/clubs` | Lista venue-a. Opcionalni filteri: `?city=`, `?country=`. Vraća `event_count` po venue-u putem `$lookup` agregacije. |
-| POST | `/api/clubs` | Ručno ubacivanje kluba. |
-| GET | `/api/clubs/<club_id>/events` | Eventi za venue, sortirani po datumu uzlazno. |
-| GET | `/api/events` | Globalni event feed. Filteri: `?city=`, `?country=`, `?genre=`, `?q=` (full-text), `?limit=` (default 100, max 500). Redis cache 60s. |
-| GET | `/api/events/<event_id>` | Puni dokument eventa po `id` ili `ticketmaster_id`. |
-| GET | `/api/cities` | Agregirani popis gradova + broj evenata (za filter dropdown). |
-| POST | `/api/sync-events` | Ručno okida `run_data_pipeline` putem Celerya. Vraća `task_id`. |
-| GET | `/api/events/<event_id>/tables` | Stolovi za event (Redis cache, 1h TTL). |
-| POST | `/api/events/<event_id>/tables/<table_id>/reserve` | Rezervacija stola (RabbitMQ broadcast + invalidacija cachea). |
-| POST | `/api/events/<event_id>/tables/<table_id>/cancel` | Otkazivanje rezervacije (samo vlasnik, provjera vlasništva). |
-| POST | `/api/users` | Kreiranje / provjera korisnika. |
-| POST | `/api/users/<username>/buy-ticket/<event_id>` | Kupnja ulaznice. |
-| GET | `/api/users/<username>/has-ticket/<event_id>` | Provjera vlasništva ulaznice. |
-| GET | `/api/reports` | Zadnjih 10 dnevnih izvještaja. |
-| GET | `/api/events/<event_id>/pricing` | `{base_price, current_price, high_demand, ...}`. Redis cache 60s. |
-| POST | `/api/events/<event_id>/request-price-update` | Ručno šalje pricing featureove u prediction queue. |
-| GET | `/api/price-log` | Zadnjih 50 ML-pokrenenih promjena cijena. |
-| GET | `/api/model-status` | Proxy prema `prediction_service /model-info`. |
-| GET | `/metrics` | Prometheus scrape endpoint. |
+### Klubovi `/api/clubs/`
+`GET ?city=` · `GET :slug` · `POST` (superadmin) · `PUT :id` (admin) ·
+`POST :id/upload-image`
 
-### Prediction Service (rutirano kroz Traefik na portu 80)
+### Eventi `/api/events/`
+`GET` (filteri: club_id, city, date_from, date_to) · `GET upcoming` ·
+`GET :id` · `POST` / `PUT :id` / `DELETE :id` (admin — DELETE je otkazivanje)
 
-| Metoda | Putanja | Opis |
-|--------|---------|------|
-| POST | `/predict-price` | Ulaz: `{artist_listeners, artist_playcount, genre_encoded, venue_capacity, days_until_event, tickets_sold_ratio, day_of_week, event_id, current_price}`. Vraća predviđenu cijenu; ažurira `price_log` i event ako je razlika >5 EUR. |
-| GET | `/model-info` | Zadnji `model_metadata` dokument. |
-| GET | `/health` | `{"status": "ok", "model_loaded": true/false}`. |
-| GET | `/metrics` | Prometheus metrike prediction servisa. |
+### Karte `/api/tickets/`
+`POST purchase` (Stripe PI + pending karta) · `POST confirm` (fallback) ·
+`GET my` · `POST :id/cancel` (refund) ·
+`GET /api/events/:id/tickets` i `.../ticket-stats` (admin)
 
-### Real-time kanal (Socket.IO)
+### Hostesa `/api/hostess/`
+`GET event/:id/guests?search=` · `POST checkin/ticket/:id` (`?by=qr` za QR) ·
+`POST checkin/reservation/:id` · `GET event/:id/stats`
 
-| Event | Smjer | Opis |
+### Mape stolova `/api/floor-maps/`
+`GET club/:id` · `GET event/:id` (s dostupnošću) · `POST` · `PUT :id` ·
+`POST :id/upload-bg` · `PUT :id/tables` (drag&drop editor)
+
+### Rezervacije `/api/reservations/`
+`GET event/:id` (dostupnost) · `POST` · `POST :id/deposit` (Stripe) ·
+`POST :id/cancel` (refund ako je na vrijeme) · `GET my` ·
+`GET event/:id/all` (admin) · `PUT :id/checkin` (hostesa)
+
+### Meni `/api/menu/`
+`GET club/:id` · `POST` · `PUT :id` · `PATCH :id/item/:item_id/availability`
+
+### Narudžbe `/api/orders/`
+`POST` (samo s aktivnom rezervacijom!) · `GET waiter` · `PUT :id/accept` ·
+`PUT :id/deliver` · `PUT :id/cancel` · `POST :id/payment` (Stripe/gotovina) ·
+`GET bar/:event_id` · `GET my`
+
+### Admin `/api/admin/`
+`GET dashboard` · `GET events/:id/live` · `GET reports` ·
+`POST staff` · `PUT staff/:id/sections` · `GET staff`
+
+### Ostalo
+`POST /api/webhooks/stripe` · `GET /api/health` · `GET /metrics`
+
+### Socket.IO
+| Event | Smjer | Soba |
 |-------|-------|------|
-| `table_updated` | Server → klijent | Emitira se u sobi `event_<id>` pri svakoj rezervaciji ili otkazivanju. |
-| `price_updated` | Server → klijent | Emitira se u sobi `event_<id>` kada ML model promijeni cijenu. Payload: `{event_id, current_price, high_demand}`. |
-| `join_event` | Klijent → server | Klijent se pridružuje sobi eventa da prima ažuriranja. |
+| `join_event` / `leave_event` | klijent → server | `event_{id}` |
+| `join_waiter` / `join_bar` | klijent → server | `waiter_{id}` / `bar_{event_id}` |
+| `table_updated` | server → klijent | `event_{id}` |
+| `order_updated` | server → klijent | `waiter_{id}` + `bar_{event_id}` |
+
+---
+
+## Poslovna logika — depozit i kupon
+
+1. Rezervacija **VIP separéa** kreira se sa statusom `pending` i rokom
+   otkazivanja 24 h prije eventa.
+2. Gost plaća depozit (Stripe Payment Sheet) → webhook potvrđuje →
+   status `confirmed`, a **cijeli iznos depozita postaje kupon**
+   (`deposit_coupon_remaining`).
+3. Pri narudžbi pića kupon se automatski primjenjuje (`apply_coupon`);
+   ako pokrije cijelu narudžbu, ništa se ne naplaćuje.
+   *Kupon je vezan uz gosta osobno i ne može se dijeliti.*
+4. Otkazivanje **prije roka** → automatski Stripe refund depozita;
+   nakon roka depozit propada.
+5. Standardni stolovi nemaju depozit — odmah su `confirmed`.
+
+Naručivanje pića dopušteno je **samo gostima s aktivnom rezervacijom**
+(`confirmed` ili `checked_in`); ostali dobivaju poruku:
+*„Naručivanje pića dostupno je samo gostima s rezerviranim stolom."*
 
 ---
 
 ## Celery rasporednik
 
-Konfiguracija u `backend/celery_config.py`:
+| Task | Raspored | Opis |
+|------|----------|------|
+| `generate_daily_report` | jednom dnevno | Agregat po klubu: karte, rezervacije, narudžbe, prihodi (uklj. depozite) |
+| `send_reservation_reminders` | svakih sat | Podsjetnik gostima ~24 h prije eventa (jednom po rezervaciji) |
 
-| Naziv taska | Raspored | Opis |
-|-------------|----------|------|
-| `generate_daily_report` | Svakih 60 sekundi | Agregira broj rezervacija i ulaznica u `reports` kolekciju. |
-| `run_data_pipeline` | Jednom dnevno (86400s) | Puni dohvat Ticketmaster + Last.fm za svih 20 gradova. |
-| `run_generate_training_data` | Svake nedjelje u 3:00 UTC | Regenerira ML training skup (~33.000 zapisa). |
-| `run_train_model` | Svake nedjelje u 4:00 UTC | Trenira Random Forest i XGBoost, sprema pobjednički model. |
+Broker i result backend su Redis (`redis://redis:6379/1` i `/2`).
 
 ---
 
-## Dinamičke cijene — ML pipeline
+## Nadzor
 
-### Tok podataka
-
-```
-Last.fm API (tag.gettopartists)
-        │
-        │  top 30 izvođača × 10 žanrova = ~300 izvođača
-        ▼
-generate_training_data.py
-        │
-        │  za svakog izvođača: 10 kapaciteta × 11 vremenskih scenarija
-        │  = 110 zapisa po izvođaču = ~33.000 ukupno
-        ▼
-MongoDB: ml_training_data
-        │
-        ▼
-train_model.py
-        │
-        │  80% train / 20% test split
-        │  Random Forest (100 stabala) vs XGBoost (200 stabala)
-        │  pobjeđuje niži RMSE
-        ▼
-/app/models/pricing_model.pkl   (dijeljeni Docker volumen)
-        │
-        ▼
-prediction_service/service.py
-        │
-        │  konzumira price_update_queue
-        │  poziva model.predict()
-        │  ako razlika >5 EUR → ažuriraj MongoDB + Redis + WebSocket
-        ▼
-Korisnik vidi ažuriranu cijenu u pregledniku (bez refresha)
-```
-
-### Feature vektor (7 značajki)
-
-| Feature | Izvor | Transformacija |
-|---------|-------|----------------|
-| `log_listeners` | Last.fm listeners | `log10(x + 1)` |
-| `log_playcount` | Last.fm playcount | `log10(x + 1)` |
-| `genre_encoded` | Last.fm tagovi → GENRE_MAP | 0–15 |
-| `venue_capacity` | Ticketmaster venue | cijeli broj |
-| `days_until_event` | datum eventa – danas | cijeli broj |
-| `tickets_sold_ratio` | rezervirani / ukupni stolovi | 0.0–1.0 |
-| `day_of_week` | datum eventa | 0 (pon) – 6 (ned) |
-
-### GENRE_MAP — enkodiranje žanra
-
-```python
-GENRE_MAP = {
-    "electronic": 1, "techno": 2, "house": 3, "trance": 4,
-    "drum and bass": 5, "dubstep": 6, "edm": 7, "dance": 8,
-    "pop": 9, "rock": 10, "hip-hop": 11, "jazz": 12,
-    "classical": 13, "metal": 14, "indie": 15, "other": 0,
-}
-```
-
-Elektronički žanrovi (kodovi 1–8) nose premiju od 20% u determinističkoj formuli.
-
-### Deterministička bazna formula (`pipeline_task.py`)
-
-```python
-popularity_score = min(log10(artist_listeners) / 7.0, 1.0)
-capacity_factor  = max(0.5, 1.0 - (venue_capacity / 10000) * 0.3)
-urgency_factor   = 1.3 if days <= 7 else 1.1 if days <= 30 else 1.0
-genre_factor     = 1.2 if genre_encoded in [1..8] else 1.0
-
-base  = 20 + (popularity_score * 130 * capacity_factor * genre_factor)
-price = round(base * urgency_factor, 2)
-```
-
----
-
-## Nadzor sustava
-
-### Prometheus metrike — backend
-
-| Metrika | Tip | Opis |
-|---------|-----|------|
-| `http_requests_total{method, endpoint, status}` | Counter | Ukupan broj HTTP zahtjeva |
-| `http_request_duration_seconds{endpoint}` | Histogram | Latencija po endpointu |
-
-### Prometheus metrike — prediction_service
-
-| Metrika | Tip | Opis |
-|---------|-----|------|
-| `predictions_total` | Counter | Ukupan broj ML predikcija |
-| `price_changes_total` | Counter | Broj promjena cijena (razlika >5 EUR) |
-| `prediction_duration_seconds` | Histogram | Trajanje jedne predikcije |
-| `model_loaded` | Gauge | 1 = model učitan, 0 = model nije dostupan |
-| `cache_hits_total` | Counter | Broj Redis cache pogodaka |
-
-### Grafana dashboard
-
-Dashboard se automatski provisiona pri pokretanju iz `grafana/provisioning/`.  
-Pristup: http://localhost:3000 (`admin` / `admin`)
-
-Paneli dashboarda:
-- Predikcije po sekundi
-- Promjene cijena
-- Status ML modela (učitan / nije)
-- Prosječno trajanje predikcije
-- Cache hit rate (Redis)
-- HTTP zahtjevi prema backendu
-- Latencija backenda
+- Backend izlaže `http_requests_total` i `http_request_duration_seconds`
+  na `/metrics` (label `endpoint` je Flask ruta, ne sirovi path).
+- Prometheus scrapea backend i Traefik svakih 15 s.
+- Grafana (port **3001**) auto-provisiona dashboard „NightClub Manager v2":
+  zahtjevi po ruti/statusu, p95 latencija, Traefik promet, brojači kupnji
+  i rezervacija.
 
 ---
 
 ## Testiranje
 
-Sveobuhvatni integracijski testovi pokrivaju sve komponente sustava:
-
 ```bash
 docker compose exec backend python run_tests.py
 ```
 
-Testovi obuhvaćaju:
-
-| Kategorija | Što se testira |
-|------------|----------------|
-| Unit testovi | `calculate_base_price`, `encode_genre`, `compute_days_until_event`, `compute_default_tickets_sold_ratio` |
-| MongoDB integracija | Postojanje kolekcija, indeksi, CRUD operacije |
-| Redis integracija | Cache za stolove, invalidacija |
-| RabbitMQ integracija | Objavljivanje i primanje poruka |
-| REST API | `/api/clubs`, `/api/events`, `/api/tables`, rezervacija, otkazivanje, ulaznice |
-| Prediction Service | `/predict-price`, `/health`, `/model-info` |
-| Prometheus | Scrape endpoint na backendu i prediction servisu |
+Pokriveno: health, registracija/prijava/refresh, role (403), superadmin
+kreiranje kluba/eventa/osoblja, staff PIN prijava, floor mapa s dostupnošću,
+rezervacija + zaštita od duplikata, meni + narudžba s gotovinom, konobarski
+accept/deliver, hostess check-in + statistike, admin dashboard/live, te
+Stripe granica (bez ključa očekuje se kontrolirana greška).
 
 ---
 
-## Poznata ograničenja
+## Poznata ograničenja (MVP)
 
 | Ograničenje | Detalj |
 |-------------|--------|
-| Bez autentikacije | Korisničko ime pohranjuje se bez provjere u `localStorage`; nema lozinke ni JWT tokena. |
-| Bez validacije ulaza | POST endpointi ne validiraju tipove ni opsege vrijednosti. |
-| Bez rate limitinga | API je otvoren za zlouporabu. |
-| ML model bez verzioniranja | Svaki retrain prepisuje prethodne `.pkl` datoteke — nema rollbacka na stariji model. |
-| `generate_training_data.py` briše kolekciju | `db.ml_training_data.drop()` briše bez potvrde — pokretanje brišu sve prethodne training podatke. |
-| Trajanje generiranja | Generiranje training podataka traje ~30 minuta zbog rate limiting Last.fm API-ja (pauza 0.3s po izvođaču). |
+| Push notifikacije | Expo Notifications još nisu žičane; podsjetnici idu emailom (SendGrid) |
+| Facebook OAuth | Backend ruta postoji; mobilni flow zahtijeva Facebook App ID |
+| QR skener | Hostesa ima pretragu + ručni check-in; kamera skener (expo-camera) je pripremljen u ovisnostima |
+| Jedan backend kontejner | Socket.IO sobe žive u jednom procesu; za skaliranje dodati socket.io Redis adapter |
+| Barski zaslon | Dostupan kroz API (`GET /api/orders/bar/:event_id`) i konobarski ekran; zaseban veliki zaslon nije izrađen |
