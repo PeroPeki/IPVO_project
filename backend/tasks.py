@@ -23,6 +23,10 @@ from db import (
     tickets_col,
     users_col,
 )
+# Svi importi moraju biti na razini modula: Celery nakon starta makne radni
+# direktorij sa sys.path (security kad worker vrti root), pa import unutar
+# taska podigne ModuleNotFoundError
+from email_service import send_reservation_reminder
 from realtime import publish
 from reservation_service import PENDING_DEPOSIT_TTL_MINUTES
 
@@ -91,8 +95,6 @@ def generate_daily_report():
 @app.task
 def send_reservation_reminders():
     """Pošalji podsjetnike za rezervacije čiji event počinje za ~24h."""
-    from email_service import send_reservation_reminder
-
     now = datetime.utcnow()
     window_start = now + timedelta(hours=23)
     window_end = now + timedelta(hours=25)

@@ -234,6 +234,19 @@ def main():
     check("PUT /api/orders/<id>/deliver", r.status_code == 200 and
           r.json()["order"]["order_status"] == "delivered")
 
+    r = requests.get(f"{BASE}/api/orders/waiter", headers=auth_headers(waiter_token))
+    check("dostavljena gotovinska ostaje vidljiva do naplate", r.status_code == 200 and
+          any(o["_id"] == order_id for o in r.json().get("orders", [])))
+
+    r = requests.put(f"{BASE}/api/orders/{order_id}/collect-cash",
+                     headers=auth_headers(waiter_token))
+    check("PUT /api/orders/<id>/collect-cash", r.status_code == 200 and
+          r.json()["order"]["payment_status"] == "paid", f"({r.status_code}: {r.text[:100]})")
+
+    r = requests.put(f"{BASE}/api/orders/{order_id}/collect-cash",
+                     headers=auth_headers(waiter_token))
+    check("dupla naplata gotovine → 409", r.status_code == 409)
+
     r = requests.get(f"{BASE}/api/orders/bar/{event_id}", headers=auth_headers(waiter_token))
     check("GET /api/orders/bar/<event_id>", r.status_code == 200)
 
@@ -282,6 +295,21 @@ def main():
               "client_secret" in r.json(), f"({r.status_code}: {r.text[:100]})")
     else:
         check("POST /api/tickets/purchase bez ključa → 502", r.status_code == 502)
+        # Kvota se atomarno rezervira pri kupnji — Stripe greška je mora vratiti
+        r = requests.get(f"{BASE}/api/events/{event_id}")
+        sold = (r.json().get("ticket_types") or [{}])[0].get("sold_quantity", -1)
+        check("kvota vraćena nakon Stripe greške", r.status_code == 200 and sold == 0)
+
+    print("\n== Sigurnost i validacija ==")
+    r = requests.get(f"{BASE}/api/events/nije-objectid")
+    check("neispravan ObjectId → 400", r.status_code == 400)
+
+    r = requests.post(f"{BASE}/api/auth/logout", headers=auth_headers(user_token))
+    check("POST /api/auth/logout", r.status_code == 200)
+
+    r = requests.get(f"{BASE}/api/tickets/my", headers=auth_headers(user_token))
+    check("revociran token → 401", r.status_code == 401,
+          f"({r.status_code}: {r.text[:100]})")
 
     print(f"\n{'='*50}")
     print(f"Prošlo: {len(PASSED)} | Palo: {len(FAILED)}")

@@ -18,8 +18,8 @@
 | Uloga | Mogućnosti |
 |-------|-----------|
 | **Gost (mobilna app)** | Registracija/prijava (email, Google, Facebook), pregled klubova i evenata, kupnja ulaznica (Stripe — kartice, Apple Pay, Google Pay), QR karta, rezervacija stola na interaktivnoj SVG mapi s real-time dostupnošću, VIP depozit koji se pretvara u kupon za piće, naručivanje pića za stol |
-| **Hostesa (mobilna app)** | Prijava emailom + PIN-om, pretraga gostiju po prezimenu, check-in karata i rezervacija, live statistike ulaska |
-| **Konobar (mobilna app)** | Prijava emailom + PIN-om, real-time narudžbe svoje sekcije, prihvat i dostava, naplata (Stripe ili gotovina) |
+| **Hostesa (web)** | Prijava emailom + PIN-om, pretraga gostiju po prezimenu, check-in karata i rezervacija, live statistike ulaska |
+| **Konobar (web)** | Prijava emailom + PIN-om, narudžbe svoje sekcije, prihvat i dostava, potvrda naplate gotovine |
 | **Admin kluba (web)** | CRUD evenata s tipovima karata, floor map editor (upload tlocrta + postavljanje stolova klikom + sekcije), meni pića, osoblje i dodjela sekcija, live dashboard eventa, izvještaji |
 | **Superadmin (web)** | Kreiranje klubova i njihovih admina, sve što i admin — za bilo koji klub |
 
@@ -58,10 +58,13 @@
    └────────────────────────────────────┘
 ```
 
-**Real-time tok:** backend objavljuje na Redis Pub/Sub kanale
-(`table_updates`, `order_updates`) → listener dretva prosljeđuje u
-Socket.IO sobe: `event_{id}` (mapa stolova), `waiter_{id}` (konobar),
-`bar_{event_id}` (barski zaslon). RabbitMQ je u potpunosti uklonjen.
+**Real-time tok:** backend i Celery worker emitiraju kroz Socket.IO
+**Redis message queue** (`realtime.publish`) → Socket.IO server isporučuje
+u sobe: `event_{id}` (mapa stolova), `waiter_{id}` (konobar),
+`bar_{event_id}` (barski zaslon). Zahvaljujući message queueu backend se
+može horizontalno skalirati (više replika dijeli isti queue).
+Socket konekcija zahtijeva važeći JWT (`auth: {token}`), a sobe
+`waiter_*`/`bar_*` dostupne su samo osoblju.
 
 ---
 
@@ -69,9 +72,9 @@ Socket.IO sobe: `event_{id}` (mapa stolova), `waiter_{id}` (konobar),
 
 | Sloj | Tehnologija |
 |------|-------------|
-| Backend API | Flask 3, flask-jwt-extended, Flask-SocketIO (gevent) |
+| Backend API | Flask 3 (Python 3.12), flask-jwt-extended (+ revokacija), flask-limiter, Flask-SocketIO (gevent + WebSocket worker) |
 | Baza | MongoDB 7 |
-| Real-time + cache + broker | Redis (Pub/Sub, Celery broker/backend) |
+| Real-time + cache + broker | Redis (Socket.IO message queue, rate-limit/blocklist, Celery broker/backend) |
 | Plaćanja | Stripe (PaymentIntents, Payment Sheet, webhookovi, refundi) |
 | Periodički zadatci | Celery + Celery Beat |
 | Mobilna aplikacija | React Native + Expo (Expo Router, NativeWind, Zustand, @stripe/stripe-react-native, react-native-svg, socket.io-client) |
@@ -98,10 +101,11 @@ IPVO_projekt/
 ├── docker-compose.yml
 ├── .env.example
 ├── backend/
-│   ├── app.py                  # Flask + Socket.IO + JWT + webhook + metrike
+│   ├── app.py                  # Flask + Socket.IO (auth) + JWT + webhook + metrike
+│   ├── extensions.py           # Rate limiter + Redis (blocklist tokena)
 │   ├── db.py                   # Mongo konekcija + indeksi (v2 shema)
 │   ├── auth_utils.py           # JWT role, hash lozinki, serijalizacija
-│   ├── realtime.py             # Redis Pub/Sub → Socket.IO
+│   ├── realtime.py             # Socket.IO emit kroz Redis message queue
 │   ├── stripe_service.py       # PaymentIntenti (karte, depoziti, piće)
 │   ├── payments.py             # Potvrde plaćanja (webhook logika)
 │   ├── reservation_service.py  # Rezervacije, depozit, kupon, check-in
@@ -123,8 +127,7 @@ IPVO_projekt/
 │   │   ├── club/[slug].tsx     # detalji kluba
 │   │   ├── event/[id].tsx      # detalji eventa + kupnja karte
 │   │   ├── reservation/        # SVG mapa + potvrda/depozit
-│   │   ├── order/              # meni → košarica → naplata
-│   │   └── staff/              # hostess.tsx, waiter.tsx
+│   │   └── order/              # meni → košarica → naplata
 │   ├── components/             # FloorMap, TableMarker, PaymentSheet…
 │   ├── hooks/  services/  store/  constants/
 ├── admin/                      # React admin panel (Vite)
@@ -234,7 +237,11 @@ filterom `active_hold: true` sprječava dvostruku rezervaciju istog stola
 
 ### Autentikacija `/api/auth/`
 `POST register` · `POST login` · `POST google` · `POST facebook` ·
-`POST refresh` · `POST admin/login` · `POST staff/login` (email + PIN)
+`POST refresh` (rotira refresh token) · `POST logout` (revocira token) ·
+`POST admin/login` · `POST staff/login` (email + PIN, hashiran u bazi)
+
+Sve auth rute imaju rate limiting po IP-u (flask-limiter + Redis);
+staff login je najstroži (5/min) zbog 4-znamenkastog PIN-a.
 
 ### Klubovi `/api/clubs/`
 `GET ?city=` · `GET :slug` · `POST` (superadmin) · `PUT :id` (admin) ·
@@ -245,8 +252,8 @@ filterom `active_hold: true` sprječava dvostruku rezervaciju istog stola
 `GET :id` · `POST` / `PUT :id` / `DELETE :id` (admin — DELETE je otkazivanje)
 
 ### Karte `/api/tickets/`
-`POST purchase` (Stripe PI + pending karta) · `POST confirm` (fallback) ·
-`GET my` · `POST :id/cancel` (refund) ·
+`POST purchase` (atomarno rezervira kvotu + Stripe PI + pending karta) ·
+`POST confirm` (fallback) · `GET my` · `POST :id/cancel` (refund + vraća kvotu) ·
 `GET /api/events/:id/tickets` i `.../ticket-stats` (admin)
 
 ### Hostesa `/api/hostess/`
@@ -267,8 +274,9 @@ filterom `active_hold: true` sprječava dvostruku rezervaciju istog stola
 
 ### Narudžbe `/api/orders/`
 `POST` (samo s aktivnom rezervacijom!) · `GET waiter` · `PUT :id/accept` ·
-`PUT :id/deliver` · `PUT :id/cancel` · `POST :id/payment` (Stripe/gotovina) ·
-`GET bar/:event_id` · `GET my`
+`PUT :id/deliver` · `PUT :id/collect-cash` (potvrda naplate gotovine) ·
+`PUT :id/cancel` (uz automatski refund ako je plaćeno karticom) ·
+`POST :id/payment` (Stripe/gotovina) · `GET bar/:event_id` · `GET my`
 
 ### Admin `/api/admin/`
 `GET dashboard` · `GET events/:id/live` · `GET reports` ·
@@ -290,7 +298,9 @@ filterom `active_hold: true` sprječava dvostruku rezervaciju istog stola
 ## Poslovna logika — depozit i kupon
 
 1. Rezervacija **VIP separéa** kreira se sa statusom `pending` i rokom
-   otkazivanja 24 h prije eventa.
+   otkazivanja 24 h prije eventa. Ako depozit ne bude plaćen u roku od
+   **15 minuta**, Celery task oslobađa stol (a zakašnjela uplata se
+   automatski potvrđuje ako je stol još slobodan, inače refundira).
 2. Gost plaća depozit (Stripe Payment Sheet) → webhook potvrđuje →
    status `confirmed`, a **cijeli iznos depozita postaje kupon**
    (`deposit_coupon_remaining`).
@@ -313,6 +323,7 @@ Naručivanje pića dopušteno je **samo gostima s aktivnom rezervacijom**
 |------|----------|------|
 | `generate_daily_report` | jednom dnevno | Agregat po klubu: karte, rezervacije, narudžbe, prihodi (uklj. depozite) |
 | `send_reservation_reminders` | svakih sat | Podsjetnik gostima ~24 h prije eventa (jednom po rezervaciji) |
+| `expire_stale_payments` | svakih 5 min | Oslobađa stolove s neplaćenim VIP depozitom i vraća kvotu neplaćenih karata (TTL 15 min) |
 
 Broker i result backend su Redis (`redis://redis:6379/1` i `/2`).
 
@@ -335,11 +346,15 @@ Broker i result backend su Redis (`redis://redis:6379/1` i `/2`).
 docker compose exec backend python run_tests.py
 ```
 
-Pokriveno: health, registracija/prijava/refresh, role (403), superadmin
-kreiranje kluba/eventa/osoblja, staff PIN prijava, floor mapa s dostupnošću,
-rezervacija + zaštita od duplikata, meni + narudžba s gotovinom, konobarski
-accept/deliver, hostess check-in + statistike, admin dashboard/live, te
-Stripe granica (bez ključa očekuje se kontrolirana greška).
+Pokriveno: health, registracija/prijava/refresh/logout (revokacija), role
+(403), superadmin kreiranje kluba/eventa/osoblja, staff PIN prijava, floor
+mapa s dostupnošću, rezervacija + zaštita od duplikata, meni + narudžba s
+gotovinom, konobarski accept/deliver/collect-cash, hostess check-in +
+statistike, admin dashboard/live, Stripe granica (bez ključa kontrolirana
+greška + provjera vraćanja kvote) i validacija neispravnog ObjectId-a.
+
+Napomena: auth rute imaju rate limiting, pa učestalo ponavljanje testova
+unutar iste minute može vratiti 429 na staff loginu.
 
 ---
 
@@ -350,5 +365,7 @@ Stripe granica (bez ključa očekuje se kontrolirana greška).
 | Push notifikacije | Expo Notifications još nisu žičane; podsjetnici idu emailom (SendGrid) |
 | Facebook OAuth | Backend ruta postoji; mobilni flow zahtijeva Facebook App ID |
 | QR skener | Hostesa ima pretragu + ručni check-in; kamera skener (expo-camera) je pripremljen u ovisnostima |
-| Jedan backend kontejner | Socket.IO sobe žive u jednom procesu; za skaliranje dodati socket.io Redis adapter |
 | Barski zaslon | Dostupan kroz API (`GET /api/orders/bar/:event_id`) i konobarski ekran; zaseban veliki zaslon nije izrađen |
+| Password reset / verifikacija emaila | Nisu implementirani (za produkciju obavezno) |
+| TLS / HTTPS | Traefik sluša samo na :80 — za produkciju dodati Let's Encrypt resolver |
+| Sign in with Apple | Potreban za App Store objavu uz Google/Facebook login |
