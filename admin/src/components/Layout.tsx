@@ -17,6 +17,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       .catch(() => {});
   }, []);
 
+  const isAdmin = auth.role === 'admin' || auth.role === 'superadmin';
+
   return (
     <div className="layout">
       <aside className="sidebar">
@@ -33,13 +35,20 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           </div>
         )}
         <nav>
-          <NavLink to="/" end>Dashboard</NavLink>
-          {auth.role === 'superadmin' && <NavLink to="/clubs">Klubovi</NavLink>}
-          <NavLink to="/events">Eventi</NavLink>
-          <NavLink to="/floor-map">Mapa stolova</NavLink>
-          <NavLink to="/staff">Osoblje</NavLink>
-          <NavLink to="/menu">Meni</NavLink>
-          <NavLink to="/reports">Izvještaji</NavLink>
+          {isAdmin && (
+            <>
+              <NavLink to="/" end>Dashboard</NavLink>
+              {auth.role === 'superadmin' && <NavLink to="/clubs">Klubovi</NavLink>}
+              <NavLink to="/events">Eventi</NavLink>
+              <NavLink to="/floor-map">Mapa stolova</NavLink>
+              <NavLink to="/staff">Osoblje</NavLink>
+              <NavLink to="/menu">Meni</NavLink>
+              <NavLink to="/reports">Izvještaji</NavLink>
+              {auth.role === 'superadmin' && <NavLink to="/accounts">Računi</NavLink>}
+            </>
+          )}
+          {auth.role === 'hostess' && <NavLink to="/checkin">Check-in</NavLink>}
+          {auth.role === 'waiter' && <NavLink to="/orders">Narudžbe</NavLink>}
         </nav>
         <button
           className="secondary logout"

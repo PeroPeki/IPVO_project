@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { ActivityIndicator, Pressable, Text } from 'react-native';
-import { Colors } from '../constants/colors';
+import { ActivityIndicator, Text } from 'react-native';
+import { glow } from '../constants/theme';
 import { payWithSheet } from '../services/stripe';
+import PressableScale from './ui/PressableScale';
 
 /**
  * Gumb koji otvara Stripe Payment Sheet (kartice, Apple Pay, Google Pay).
@@ -28,14 +29,15 @@ export default function PaymentSheet({
   }
 
   return (
-    <Pressable
-      className="bg-accent1 rounded-xl py-4 items-center"
+    <PressableScale
+      className="bg-neon rounded-2xl py-4 items-center"
+      style={glow}
       onPress={pay}
       disabled={loading}
     >
       {loading
-        ? <ActivityIndicator color={Colors.white} />
-        : <Text className="text-white font-bold text-base">{label}</Text>}
-    </Pressable>
+        ? <ActivityIndicator color="#FFFFFF" />
+        : <Text className="text-white font-bodyBd text-base">{label}</Text>}
+    </PressableScale>
   );
 }

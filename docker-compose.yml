@@ -2,6 +2,7 @@ services:
   traefik:
     image: traefik:v2.11
     container_name: traefik
+    restart: unless-stopped
     command:
       - "--api.insecure=true"
       - "--providers.docker=true"
@@ -21,6 +22,13 @@ services:
   backend:
     build: ./backend
     container_name: backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/api/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
     volumes:
       - ./backend:/app
       - uploads:/app/uploads
@@ -40,6 +48,7 @@ services:
       - JWT_SECRET=${JWT_SECRET:-dev-secret-change-me}
       - CLOUDINARY_URL=${CLOUDINARY_URL:-}
       - SENDGRID_API_KEY=${SENDGRID_API_KEY:-}
+      - EMAIL_FROM=${EMAIL_FROM:-}
     depends_on:
       mongo:
         condition: service_healthy
@@ -51,6 +60,7 @@ services:
   admin:
     build: ./admin
     container_name: admin
+    restart: unless-stopped
     labels:
       - "traefik.enable=true"
       - 'traefik.http.routers.admin.rule=Host("admin.localhost")'
@@ -64,6 +74,7 @@ services:
   analytics_worker:
     build: ./backend
     container_name: analytics_worker
+    restart: unless-stopped
     command: celery -A tasks worker --beat --loglevel=info
     volumes:
       - ./backend:/app
@@ -71,6 +82,7 @@ services:
       - MONGO_URI=mongodb://mongo:27017
       - REDIS_HOST=redis
       - SENDGRID_API_KEY=${SENDGRID_API_KEY:-}
+      - EMAIL_FROM=${EMAIL_FROM:-}
     depends_on:
       mongo:
         condition: service_healthy
@@ -98,6 +110,7 @@ services:
   redis:
     image: redis:alpine
     container_name: redis
+    restart: unless-stopped
     ports:
       - "6379:6379"
     healthcheck:
@@ -111,6 +124,7 @@ services:
   prometheus:
     image: prom/prometheus:v2.51.2
     container_name: prometheus
+    restart: unless-stopped
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     ports:
@@ -121,11 +135,12 @@ services:
   grafana:
     image: grafana/grafana:10.4.1
     container_name: grafana
+    restart: unless-stopped
     ports:
       - "3001:3000"
     environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning
     depends_on:

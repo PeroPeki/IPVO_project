@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../../api';
 
@@ -19,6 +19,31 @@ export default function ClubForm() {
     is_active: existing?.is_active ?? true,
   });
   const [error, setError] = useState('');
+
+  const [admins, setAdmins] = useState<any[]>([]);
+  const [adminForm, setAdminForm] = useState({ name: '', email: '', password: '' });
+  const [adminError, setAdminError] = useState('');
+
+  function loadAdmins() {
+    if (!id) return;
+    api<{ admins: any[] }>(`/api/admin/club-admins?club_id=${id}`)
+      .then((d) => setAdmins(d.admins))
+      .catch(() => setAdmins([]));
+  }
+
+  useEffect(loadAdmins, [id]);
+
+  async function addAdmin(e: React.FormEvent) {
+    e.preventDefault();
+    setAdminError('');
+    try {
+      await api(`/api/admin/club-admins?club_id=${id}`, { body: adminForm });
+      setAdminForm({ name: '', email: '', password: '' });
+      loadAdmins();
+    } catch (err: any) {
+      setAdminError(err.message);
+    }
+  }
 
   function set(key: string, value: any) {
     setForm((f) => ({ ...f, [key]: value }));
@@ -112,6 +137,52 @@ export default function ClubForm() {
         {error && <div className="error-msg">{error}</div>}
         <button style={{ marginTop: 16 }}>{id ? 'Spremi' : 'Kreiraj'}</button>
       </form>
+
+      {id && (
+        <div className="card" style={{ maxWidth: 640 }}>
+          <h2 style={{ marginTop: 0 }}>Admini kluba</h2>
+          <table>
+            <thead>
+              <tr><th>Ime</th><th>Email</th><th>Status</th></tr>
+            </thead>
+            <tbody>
+              {admins.map((a) => (
+                <tr key={a._id}>
+                  <td>{a.name}</td>
+                  <td>{a.email}</td>
+                  <td>
+                    <span className={`badge ${a.is_active ? 'success' : 'muted'}`}>
+                      {a.is_active ? 'Aktivan' : 'Neaktivan'}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {admins.length === 0 && <p className="muted" style={{ marginTop: 10 }}>Nema admina.</p>}
+
+          <h3>Dodaj admina</h3>
+          <form onSubmit={addAdmin} className="form-row" style={{ alignItems: 'flex-end' }}>
+            <div>
+              <label>Ime i prezime</label>
+              <input value={adminForm.name}
+                     onChange={(e) => setAdminForm({ ...adminForm, name: e.target.value })} required />
+            </div>
+            <div>
+              <label>Email</label>
+              <input type="email" value={adminForm.email}
+                     onChange={(e) => setAdminForm({ ...adminForm, email: e.target.value })} required />
+            </div>
+            <div>
+              <label>Lozinka</label>
+              <input type="password" value={adminForm.password} minLength={6}
+                     onChange={(e) => setAdminForm({ ...adminForm, password: e.target.value })} required />
+            </div>
+            <button>Dodaj</button>
+          </form>
+          {adminError && <div className="error-msg">{adminError}</div>}
+        </div>
+      )}
     </>
   );
 }

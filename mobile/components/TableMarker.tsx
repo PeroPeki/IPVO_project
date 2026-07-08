@@ -37,8 +37,8 @@ export default function TableMarker({
         width={table.width}
         height={table.height}
         rx={1.2}
-        fill={table.type === 'vip_separe' ? Colors.accent2 : Colors.accent3}
-        fillOpacity={available ? 0.85 : 0.35}
+        fill={table.type === 'vip_separe' ? Colors.neon : Colors.surfaceHi}
+        fillOpacity={available ? 0.85 : 0.3}
         stroke={stroke}
         strokeWidth={0.5}
       />
@@ -47,7 +47,7 @@ export default function TableMarker({
         y={table.y + 1}
         textAnchor="middle"
         fontSize={2.6}
-        fill={Colors.textLight}
+        fill={Colors.white}
         fontWeight="bold"
       >
         {table.label}

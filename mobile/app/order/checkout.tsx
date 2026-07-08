@@ -1,7 +1,9 @@
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Alert, Pressable, ScrollView, Text, View } from 'react-native';
+import { Alert, ScrollView, Text, View } from 'react-native';
 import PaymentSheet from '../../components/PaymentSheet';
+import PressableScale from '../../components/ui/PressableScale';
+import { glow } from '../../constants/theme';
 import { useCart } from '../../hooks/useCart';
 import { api, errorMessage } from '../../services/api';
 
@@ -49,60 +51,58 @@ export default function Checkout() {
   ];
 
   return (
-    <ScrollView className="flex-1 bg-bgDark px-4 pt-4">
-      <Text className="text-textLight text-xl font-extrabold mb-3">Sažetak narudžbe</Text>
-      <View className="bg-bgCard rounded-xl p-4 border border-accent3">
+    <ScrollView className="flex-1 bg-ink px-5 pt-5" showsVerticalScrollIndicator={false}>
+      <Text className="text-white font-display text-2xl uppercase mb-3" style={{ letterSpacing: 0.5 }}>Sažetak</Text>
+      <View className="bg-surface rounded-2xl p-5 border border-line">
         {cart.items.map((i) => (
           <View key={i.menu_item_id} className="flex-row justify-between py-1">
-            <Text className="text-textLight">{i.quantity}× {i.name}</Text>
-            <Text className="text-textMuted">{(i.price * i.quantity).toFixed(2)} €</Text>
+            <Text className="text-text font-body">{i.quantity}× {i.name}</Text>
+            <Text className="text-muted font-body">{(i.price * i.quantity).toFixed(2)} €</Text>
           </View>
         ))}
-        <View className="flex-row justify-between pt-3 mt-2 border-t border-accent3/50">
-          <Text className="text-textLight font-bold">Ukupno (prije kupona)</Text>
-          <Text className="text-textLight font-extrabold">{cart.total().toFixed(2)} €</Text>
+        <View className="flex-row justify-between pt-3 mt-2 border-t border-line">
+          <Text className="text-text font-bodySb">Ukupno (prije kupona)</Text>
+          <Text className="text-white font-heading">{cart.total().toFixed(2)} €</Text>
         </View>
         {result && result.coupon_applied > 0 && (
           <>
-            <View className="flex-row justify-between mt-1">
-              <Text className="text-accent1">VIP kupon</Text>
-              <Text className="text-accent1">−{result.coupon_applied} €</Text>
+            <View className="flex-row justify-between mt-2">
+              <Text className="text-neon font-bodySb">VIP kupon</Text>
+              <Text className="text-neon font-bodySb">−{result.coupon_applied} €</Text>
             </View>
             <View className="flex-row justify-between mt-1">
-              <Text className="text-textLight font-bold">Za platiti</Text>
-              <Text className="text-textLight font-extrabold">{result.total} €</Text>
+              <Text className="text-text font-bodySb">Za platiti</Text>
+              <Text className="text-white font-heading">{result.total} €</Text>
             </View>
           </>
         )}
       </View>
 
-      <Text className="text-textLight text-lg font-bold mt-6 mb-2">Način plaćanja</Text>
-      {methods.map((m) => (
-        <Pressable
-          key={m.value}
-          className={`rounded-xl p-4 mb-2 border ${
-            method === m.value ? 'border-accent1 bg-accent1/10' : 'border-accent3 bg-bgCard'
-          }`}
-          disabled={!!result}
-          onPress={() => setMethod(m.value)}
-        >
-          <Text className={method === m.value ? 'text-accent1 font-bold' : 'text-textLight'}>
-            {m.label}
-          </Text>
-        </Pressable>
-      ))}
+      <Text className="text-white font-display text-[22px] uppercase mt-7 mb-3" style={{ letterSpacing: 0.5 }}>Plaćanje</Text>
+      {methods.map((m) => {
+        const active = method === m.value;
+        return (
+          <PressableScale
+            key={m.value}
+            className={`rounded-2xl p-4 mb-2.5 border ${active ? 'border-neon bg-neon/10' : 'border-line bg-surface'}`}
+            disabled={!!result}
+            onPress={() => setMethod(m.value)}
+          >
+            <Text className={active ? 'text-white font-bodyBd' : 'text-text font-bodyMd'}>{m.label}</Text>
+          </PressableScale>
+        );
+      })}
 
-      <View className="mt-4 mb-12">
+      <View className="mt-4 mb-14">
         {!result ? (
-          <Pressable
-            className="bg-accent1 rounded-xl py-4 items-center"
+          <PressableScale
+            className="bg-neon rounded-2xl py-4 items-center"
+            style={glow}
             onPress={placeOrder}
             disabled={placing}
           >
-            <Text className="text-white font-bold text-base">
-              {placing ? 'Slanje…' : 'Naruči'}
-            </Text>
-          </Pressable>
+            <Text className="text-white font-bodyBd text-base">{placing ? 'Slanje…' : 'Naruči'}</Text>
+          </PressableScale>
         ) : result.client_secret ? (
           <PaymentSheet
             clientSecret={result.client_secret}

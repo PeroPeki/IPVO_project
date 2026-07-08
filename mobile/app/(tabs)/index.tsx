@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import { FlatList, RefreshControl, Text, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import ClubCard from '../../components/ClubCard';
 import EventCard from '../../components/EventCard';
+import FadeIn from '../../components/ui/FadeIn';
+import ScreenHeader from '../../components/ui/ScreenHeader';
 import { Colors } from '../../constants/colors';
 import { api } from '../../services/api';
 
@@ -24,9 +27,7 @@ export default function Home() {
     }
   }, []);
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  useEffect(() => { load(); }, [load]);
 
   async function refresh() {
     setRefreshing(true);
@@ -35,30 +36,39 @@ export default function Home() {
   }
 
   return (
-    <FlatList
-      className="flex-1 bg-bgDark px-4"
-      data={events}
-      keyExtractor={(e) => e._id}
-      renderItem={({ item }) => <EventCard event={item} />}
-      refreshControl={
-        <RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={Colors.accent1} />
-      }
-      ListHeaderComponent={
-        <Text className="text-textLight text-2xl font-extrabold mt-4 mb-3">
-          Nadolazeći eventi
-        </Text>
-      }
-      ListEmptyComponent={
-        <Text className="text-textMuted text-center mt-10">
-          Trenutno nema objavljenih evenata.
-        </Text>
-      }
-      ListFooterComponent={
-        <View className="mb-8">
-          <Text className="text-textLight text-2xl font-extrabold mt-6 mb-3">Klubovi</Text>
-          {clubs.map((c) => <ClubCard key={c._id} club={c} />)}
-        </View>
-      }
-    />
+    <SafeAreaView edges={['top']} className="flex-1 bg-ink">
+      <FlatList
+        className="px-5"
+        showsVerticalScrollIndicator={false}
+        data={events}
+        keyExtractor={(e) => e._id}
+        renderItem={({ item, index }) => (
+          <FadeIn delay={Math.min(index, 6) * 60}>
+            <EventCard event={item} />
+          </FadeIn>
+        )}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={Colors.neon} />
+        }
+        ListHeaderComponent={<ScreenHeader eyebrow="Novalja · Zrće" title="Nadolazeći eventi" />}
+        ListEmptyComponent={
+          <Text className="text-muted font-body text-center mt-10">
+            Trenutno nema objavljenih evenata.
+          </Text>
+        }
+        ListFooterComponent={
+          <View className="mb-10">
+            <Text className="text-white font-display text-[26px] uppercase mt-8 mb-4" style={{ letterSpacing: 0.5 }}>
+              Klubovi
+            </Text>
+            {clubs.map((c, i) => (
+              <FadeIn key={c._id} delay={Math.min(i, 5) * 60}>
+                <ClubCard club={c} />
+              </FadeIn>
+            ))}
+          </View>
+        }
+      />
+    </SafeAreaView>
   );
 }

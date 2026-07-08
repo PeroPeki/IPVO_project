@@ -2,6 +2,7 @@
 
 import { create } from 'zustand';
 import { api, clearTokens, errorMessage, saveTokens } from '../services/api';
+import { resetSocket } from '../services/socket';
 
 type User = {
   _id: string;
@@ -11,23 +12,18 @@ type User = {
   profile_image?: string | null;
 };
 
-type Staff = { _id: string; name: string; club_id: string };
-
 type AuthState = {
   user: User | null;
-  staff: Staff | null;
-  role: 'user' | 'hostess' | 'waiter' | null;
+  role: 'user' | null;
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
   register: (name: string, email: string, password: string, phone?: string) => Promise<void>;
   oauthLogin: (provider: 'google' | 'facebook', token: string) => Promise<void>;
-  staffLogin: (email: string, pin: string) => Promise<void>;
   logout: () => Promise<void>;
 };
 
 export const useAuthStore = create<AuthState>((set) => ({
   user: null,
-  staff: null,
   role: null,
   loading: false,
 
@@ -36,7 +32,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     try {
       const res = await api.post('/api/auth/login', { email, password });
       await saveTokens(res.data.access_token, res.data.refresh_token);
-      set({ user: res.data.user, role: 'user', staff: null });
+      set({ user: res.data.user, role: 'user' });
     } catch (err) {
       throw new Error(errorMessage(err));
     } finally {
@@ -49,7 +45,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     try {
       const res = await api.post('/api/auth/register', { name, email, password, phone });
       await saveTokens(res.data.access_token, res.data.refresh_token);
-      set({ user: res.data.user, role: 'user', staff: null });
+      set({ user: res.data.user, role: 'user' });
     } catch (err) {
       throw new Error(errorMessage(err));
     } finally {
@@ -63,20 +59,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       const body = provider === 'google' ? { id_token: token } : { access_token: token };
       const res = await api.post(`/api/auth/${provider}`, body);
       await saveTokens(res.data.access_token, res.data.refresh_token);
-      set({ user: res.data.user, role: 'user', staff: null });
-    } catch (err) {
-      throw new Error(errorMessage(err));
-    } finally {
-      set({ loading: false });
-    }
-  },
-
-  staffLogin: async (email, pin) => {
-    set({ loading: true });
-    try {
-      const res = await api.post('/api/auth/staff/login', { email, pin });
-      await saveTokens(res.data.access_token, res.data.refresh_token);
-      set({ staff: res.data.staff, role: res.data.role, user: null });
+      set({ user: res.data.user, role: 'user' });
     } catch (err) {
       throw new Error(errorMessage(err));
     } finally {
@@ -85,8 +68,15 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   logout: async () => {
+    // Best-effort revokacija tokena na serveru; lokalno čistimo u svakom slučaju
+    try {
+      await api.post('/api/auth/logout');
+    } catch {
+      // token je možda već istekao — svejedno nastavi s lokalnim logoutom
+    }
     await clearTokens();
-    set({ user: null, staff: null, role: null });
+    resetSocket();
+    set({ user: null, role: null });
   },
 }));
 

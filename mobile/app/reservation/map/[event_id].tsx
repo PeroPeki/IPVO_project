@@ -30,22 +30,22 @@ export default function ReservationMap() {
   }
 
   return (
-    <ScrollView className="flex-1 bg-bgDark px-4 pt-4">
-      <Text className="text-textLight text-xl font-extrabold mb-1">Odaberi svoj stol</Text>
-      <Text className="text-textMuted mb-4">
+    <ScrollView className="flex-1 bg-ink px-5 pt-5" showsVerticalScrollIndicator={false}>
+      <Text className="text-white font-display text-[26px] uppercase" style={{ letterSpacing: 0.5 }}>Odaberi stol</Text>
+      <Text className="text-muted font-body mt-1 mb-4">
         Dodirni slobodan (zeleni) stol za detalje i rezervaciju.
       </Text>
-      {error ? <Text className="text-error">{error}</Text> : null}
+      {error ? <Text className="text-error font-body">{error}</Text> : null}
       {map && (
         <FloorMap map={map} eventId={String(event_id)} onReserve={reserve} />
       )}
       {map?.sections?.length > 0 && (
-        <View className="mt-4 mb-10">
-          <Text className="text-textMuted text-xs uppercase mb-2">Sekcije</Text>
+        <View className="mt-5 mb-10">
+          <Text className="text-neon font-bodySb text-[11px] uppercase mb-2" style={{ letterSpacing: 2 }}>Sekcije</Text>
           {map.sections.map((s: any) => (
-            <View key={s.id} className="flex-row items-center gap-2 mb-1">
+            <View key={s.id} className="flex-row items-center gap-2 mb-1.5">
               <View style={{ width: 10, height: 10, borderRadius: 3, backgroundColor: s.color }} />
-              <Text className="text-textMuted">{s.name}</Text>
+              <Text className="text-muted font-body">{s.name}</Text>
             </View>
           ))}
         </View>

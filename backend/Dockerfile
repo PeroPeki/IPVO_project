@@ -1,4 +1,4 @@
-FROM python:3.9-slim
+FROM python:3.12-slim
 
 WORKDIR /app
 
@@ -11,5 +11,6 @@ COPY . .
 ENV FLASK_APP=app.py
 ENV PYTHONUNBUFFERED=1
 
-# -w 1 znači jedan worker (proces) jer koristimo gevent koji je asinkroni
-CMD ["gunicorn", "--worker-class", "gevent", "-w", "1", "--bind", "0.0.0.0:5000", "app:app"]
+# GeventWebSocketWorker omogućuje prave WebSocket konekcije (Socket.IO);
+# -w 1 po kontejneru — skaliranje ide replikama (Socket.IO Redis queue)
+CMD ["gunicorn", "--worker-class", "geventwebsocket.gunicorn.workers.GeventWebSocketWorker", "-w", "1", "--bind", "0.0.0.0:5000", "app:app"]

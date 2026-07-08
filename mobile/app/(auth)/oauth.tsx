@@ -3,6 +3,7 @@ import { useRouter } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import { useEffect, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
+import PressableScale from '../../components/ui/PressableScale';
 import { useAuth } from '../../hooks/useAuth';
 
 WebBrowser.maybeCompleteAuthSession();
@@ -27,35 +28,36 @@ export default function OAuth() {
   }, [response]);
 
   return (
-    <View className="flex-1 bg-bgDark justify-center px-6">
-      <Text className="text-textLight text-2xl font-extrabold mb-8 text-center">
-        Prijava putem servisa
+    <View className="flex-1 bg-ink justify-center px-7">
+      <Text className="text-neon font-bodySb text-xs uppercase mb-2 text-center" style={{ letterSpacing: 3 }}>Brza prijava</Text>
+      <Text className="text-white font-display text-3xl uppercase mb-8 text-center" style={{ letterSpacing: 0.5 }}>
+        Nastavi putem servisa
       </Text>
 
-      <Pressable
-        className="bg-bgCard border border-accent3 rounded-xl py-4 items-center mb-3"
+      <PressableScale
+        className="bg-surface border border-line rounded-2xl py-4 items-center mb-3"
         disabled={!request}
         onPress={() => promptAsync()}
       >
-        <Text className="text-textLight font-semibold">Nastavi s Googleom</Text>
-      </Pressable>
+        <Text className="text-text font-bodySb">Nastavi s Googleom</Text>
+      </PressableScale>
 
       <Pressable
-        className="bg-bgCard border border-accent3 rounded-xl py-4 items-center opacity-60"
+        className="bg-surface border border-line rounded-2xl py-4 items-center opacity-50"
         onPress={() => setError('Facebook prijava zahtijeva konfiguriran Facebook App ID.')}
       >
-        <Text className="text-textLight font-semibold">Nastavi s Facebookom</Text>
+        <Text className="text-text font-bodySb">Nastavi s Facebookom</Text>
       </Pressable>
 
       {!GOOGLE_CLIENT_ID && (
-        <Text className="text-textMuted text-xs text-center mt-4">
+        <Text className="text-muted font-body text-xs text-center mt-4">
           Postavi EXPO_PUBLIC_GOOGLE_CLIENT_ID u .env za Google prijavu.
         </Text>
       )}
-      {error ? <Text className="text-error text-center mt-4">{error}</Text> : null}
+      {error ? <Text className="text-error font-body text-center mt-4">{error}</Text> : null}
 
       <Pressable className="mt-8" onPress={() => router.back()}>
-        <Text className="text-accent1 text-center font-semibold">← Natrag</Text>
+        <Text className="text-neon font-bodySb text-center">← Natrag</Text>
       </Pressable>
     </View>
   );

@@ -131,16 +131,20 @@ def cancel_reservation_route(reservation_id):
 def my_reservations():
     reservations = list(
         table_reservations_col.find({"user_id": current_user_id()})
-        .sort("created_at", -1)
+        .sort("created_at", -1).limit(100)
     )
+    event_ids = list({r["event_id"] for r in reservations})
+    events = {
+        e["_id"]: serialize(e) for e in events_col.find(
+            {"_id": {"$in": event_ids}}, {"name": 1, "date": 1, "cover_image": 1}
+        )
+    }
     enriched = []
     for r in reservations:
         doc = serialize(r)
-        event = events_col.find_one(
-            {"_id": r["event_id"]}, {"name": 1, "date": 1, "cover_image": 1}
-        )
+        event = events.get(r["event_id"])
         if event:
-            doc["event"] = serialize(event)
+            doc["event"] = event
         enriched.append(doc)
     return jsonify({"reservations": enriched})
 

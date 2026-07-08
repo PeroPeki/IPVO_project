@@ -60,11 +60,17 @@ def ensure_indexes():
         tickets_col.create_index([("event_id", ASCENDING)])
         tickets_col.create_index([("qr_code", ASCENDING)], unique=True)
         tickets_col.create_index([("stripe_payment_intent_id", ASCENDING)], sparse=True)
+        # Za expiry task (pending karte starije od TTL-a)
+        tickets_col.create_index([("status", ASCENDING), ("purchased_at", ASCENDING)])
 
         floor_maps_col.create_index([("club_id", ASCENDING)])
 
         table_reservations_col.create_index([("user_id", ASCENDING)])
         table_reservations_col.create_index([("event_id", ASCENDING)])
+        # Za expiry task (pending rezervacije starije od TTL-a)
+        table_reservations_col.create_index(
+            [("status", ASCENDING), ("created_at", ASCENDING)]
+        )
         # Garancija da jedan stol na jednom eventu drži najviše jedna aktivna
         # rezervacija (pending/confirmed/checked_in imaju active_hold=True).
         # Partial unique indeks jer Mongo ne podržava $in u partialFilterExpression.

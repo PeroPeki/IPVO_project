@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Modal, Pressable, Text, View } from 'react-native';
 import Svg, { Image as SvgImage } from 'react-native-svg';
+import { Colors } from '../constants/colors';
+import { glow } from '../constants/theme';
 import { useSocketEvent } from '../hooks/useSocket';
 import { joinEventRoom, leaveEventRoom } from '../services/socket';
 import TableMarker, { FloorTable } from './TableMarker';
+import PressableScale from './ui/PressableScale';
 
 /**
  * SVG mapa stolova:
@@ -47,14 +50,14 @@ export default function FloorMap({
     <View>
       <Svg
         viewBox="0 0 100 70"
-        style={{ width: '100%', aspectRatio: 100 / 70, backgroundColor: '#0A0010', borderRadius: 12 }}
+        style={{ width: '100%', aspectRatio: 100 / 70, backgroundColor: Colors.surface, borderRadius: 16 }}
       >
         {map.background_image_url && (
           <SvgImage
             href={{ uri: map.background_image_url }}
             x="0" y="0" width="100" height="70"
             preserveAspectRatio="xMidYMid slice"
-            opacity={0.45}
+            opacity={0.4}
           />
         )}
         {tables.map((t) => (
@@ -63,42 +66,43 @@ export default function FloorMap({
       </Svg>
 
       <View className="flex-row gap-4 mt-3">
-        <View className="flex-row items-center gap-1">
-          <View className="w-3 h-3 rounded-sm border-2 border-success bg-accent3" />
-          <Text className="text-textMuted text-xs">Slobodno</Text>
+        <View className="flex-row items-center gap-1.5">
+          <View className="w-3 h-3 rounded-sm border-2 border-success bg-surfaceHi" />
+          <Text className="text-muted font-body text-xs">Slobodno</Text>
         </View>
-        <View className="flex-row items-center gap-1">
-          <View className="w-3 h-3 rounded-sm border-2 border-error bg-accent3/40" />
-          <Text className="text-textMuted text-xs">Rezervirano</Text>
+        <View className="flex-row items-center gap-1.5">
+          <View className="w-3 h-3 rounded-sm border-2 border-error bg-surfaceHi/40" />
+          <Text className="text-muted font-body text-xs">Rezervirano</Text>
         </View>
       </View>
 
       <Modal visible={!!selected} transparent animationType="slide" onRequestClose={() => setSelected(null)}>
         <Pressable className="flex-1 bg-black/70 justify-end" onPress={() => setSelected(null)}>
-          <Pressable className="bg-bgCard rounded-t-3xl p-6" onPress={() => {}}>
+          <Pressable className="bg-surface rounded-t-3xl p-6 border-t border-line" onPress={() => {}}>
             {selected && (
               <>
-                <Text className="text-textLight text-2xl font-extrabold">
+                <Text className="text-white font-display text-2xl uppercase" style={{ letterSpacing: 0.4 }}>
                   {selected.type === 'vip_separe' ? 'VIP separé' : 'Stol'} {selected.label}
                 </Text>
-                <Text className="text-textMuted mt-2">Kapacitet: do {selected.capacity} osoba</Text>
+                <Text className="text-muted font-body mt-2">Kapacitet: do {selected.capacity} osoba</Text>
                 {selected.min_spend > 0 && (
-                  <Text className="text-textMuted mt-1">Minimalna potrošnja: {selected.min_spend} €</Text>
+                  <Text className="text-muted font-body mt-1">Minimalna potrošnja: {selected.min_spend} €</Text>
                 )}
                 {selected.type === 'vip_separe' && selected.deposit > 0 && (
-                  <Text className="text-warning mt-1">
+                  <Text className="text-warning font-body mt-1">
                     Depozit: {selected.deposit} € (pretvara se u kupon za piće)
                   </Text>
                 )}
                 {selected.description ? (
-                  <Text className="text-textMuted mt-2">{selected.description}</Text>
+                  <Text className="text-muted font-body mt-2">{selected.description}</Text>
                 ) : null}
-                <Pressable
-                  className="bg-accent1 rounded-xl py-4 items-center mt-6"
+                <PressableScale
+                  className="bg-neon rounded-2xl py-4 items-center mt-6"
+                  style={glow}
                   onPress={() => { const t = selected; setSelected(null); onReserve(t); }}
                 >
-                  <Text className="text-white font-bold text-base">Rezerviraj</Text>
-                </Pressable>
+                  <Text className="text-white font-bodyBd text-base">Rezerviraj</Text>
+                </PressableScale>
               </>
             )}
           </Pressable>

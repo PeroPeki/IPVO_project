@@ -3,8 +3,12 @@ import { useState } from 'react';
 import {
   ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, Text, TextInput, View,
 } from 'react-native';
+import PressableScale from '../../components/ui/PressableScale';
 import { Colors } from '../../constants/colors';
+import { glow } from '../../constants/theme';
 import { useAuth } from '../../hooks/useAuth';
+
+const INPUT = 'bg-surface text-text font-body rounded-2xl px-4 py-4 mb-3 border border-line';
 
 export default function Login() {
   const router = useRouter();
@@ -26,49 +30,54 @@ export default function Login() {
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      className="flex-1 bg-bgDark justify-center px-6"
+      className="flex-1 bg-ink justify-center px-7"
     >
-      <Text className="text-accent1 text-4xl font-extrabold text-center">NIGHTCLUB</Text>
-      <Text className="text-textLight text-xl font-bold text-center mb-10">MANAGER</Text>
+      <View className="items-center mb-12">
+        <Text
+          className="text-white font-display text-5xl uppercase"
+          style={{ letterSpacing: 2, textShadowColor: Colors.neon, textShadowRadius: 20, textShadowOffset: { width: 0, height: 0 } }}
+        >
+          Nightclub
+        </Text>
+        <Text className="text-neon font-sub text-sm uppercase mt-1" style={{ letterSpacing: 6 }}>
+          Manager
+        </Text>
+      </View>
 
       <TextInput
-        className="bg-bgCard text-textLight rounded-xl px-4 py-4 mb-3 border border-accent3"
+        className={INPUT}
         placeholder="Email"
-        placeholderTextColor={Colors.textMuted}
+        placeholderTextColor={Colors.muted}
         autoCapitalize="none"
         keyboardType="email-address"
         value={email}
         onChangeText={setEmail}
       />
       <TextInput
-        className="bg-bgCard text-textLight rounded-xl px-4 py-4 mb-3 border border-accent3"
+        className={INPUT}
         placeholder="Lozinka"
-        placeholderTextColor={Colors.textMuted}
+        placeholderTextColor={Colors.muted}
         secureTextEntry
         value={password}
         onChangeText={setPassword}
       />
 
-      {error ? <Text className="text-error mb-3">{error}</Text> : null}
+      {error ? <Text className="text-error font-body mb-3">{error}</Text> : null}
 
-      <Pressable className="bg-accent1 rounded-xl py-4 items-center" onPress={submit} disabled={loading}>
-        {loading ? <ActivityIndicator color="#fff" /> : <Text className="text-white font-bold text-base">Prijavi se</Text>}
-      </Pressable>
+      <PressableScale className="bg-neon rounded-2xl py-4 items-center mt-1" style={glow} onPress={submit} disabled={loading}>
+        {loading ? <ActivityIndicator color="#fff" /> : <Text className="text-white font-bodyBd text-base">Prijavi se</Text>}
+      </PressableScale>
 
       <Link href="/(auth)/oauth" asChild>
-        <Pressable className="bg-bgCard border border-accent3 rounded-xl py-4 items-center mt-3">
-          <Text className="text-textLight font-semibold">Nastavi s Google / Facebook</Text>
+        <Pressable className="bg-surface border border-line rounded-2xl py-4 items-center mt-3">
+          <Text className="text-text font-bodySb">Nastavi s Google / Facebook</Text>
         </Pressable>
       </Link>
 
-      <View className="flex-row justify-center mt-6">
-        <Text className="text-textMuted">Nemaš račun? </Text>
-        <Link href="/(auth)/register" className="text-accent1 font-bold">Registriraj se</Link>
+      <View className="flex-row justify-center mt-7">
+        <Text className="text-muted font-body">Nemaš račun? </Text>
+        <Link href="/(auth)/register" className="text-neon font-bodyBd">Registriraj se</Link>
       </View>
-
-      <Link href="/staff/hostess" className="text-textMuted text-center mt-10 text-xs">
-        Prijava za osoblje →
-      </Link>
     </KeyboardAvoidingView>
   );
 }

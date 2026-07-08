@@ -46,26 +46,45 @@ def purchase_ticket():
         return jsonify({"error": "Prodaja još nije počela"}), 409
     if ticket_type.get("sale_end") and now > ticket_type["sale_end"]:
         return jsonify({"error": "Prodaja je završila"}), 409
-    if ticket_type["sold_quantity"] >= ticket_type["total_quantity"]:
-        return jsonify({"error": "Karte ovog tipa su rasprodane"}), 409
 
     user = users_col.find_one({"_id": current_user_id()})
     if not user:
         return jsonify({"error": "Korisnik ne postoji"}), 404
 
-    # Osiguraj Stripe customera (Apple Pay / Google Pay / kartice)
-    if not user.get("stripe_customer_id"):
-        customer_id = stripe_service.get_or_create_stripe_customer(user)
-        users_col.update_one(
-            {"_id": user["_id"]}, {"$set": {"stripe_customer_id": customer_id}}
-        )
-        user["stripe_customer_id"] = customer_id
+    # Atomarno rezerviraj kvotu — guard u array_filteru sprječava overselling
+    # pri istovremenim kupnjama (kvota se vraća ako plaćanje ne uspije/istekne)
+    claimed = events_col.update_one(
+        {"_id": event["_id"]},
+        {"$inc": {"ticket_types.$[t].sold_quantity": 1}},
+        array_filters=[{
+            "t.id": ticket_type_id,
+            "t.sold_quantity": {"$lt": ticket_type["total_quantity"]},
+        }],
+    )
+    if not claimed.modified_count:
+        return jsonify({"error": "Karte ovog tipa su rasprodane"}), 409
 
+    def _release_quota():
+        events_col.update_one(
+            {"_id": event["_id"]},
+            {"$inc": {"ticket_types.$[t].sold_quantity": -1}},
+            array_filters=[{"t.id": ticket_type_id}],
+        )
+
+    # Osiguraj Stripe customera (Apple Pay / Google Pay / kartice)
     try:
+        if not user.get("stripe_customer_id"):
+            customer_id = stripe_service.get_or_create_stripe_customer(user)
+            users_col.update_one(
+                {"_id": user["_id"]}, {"$set": {"stripe_customer_id": customer_id}}
+            )
+            user["stripe_customer_id"] = customer_id
+
         intent = stripe_service.create_ticket_payment_intent(
             ticket_type["price"], user, event_id, ticket_type_id
         )
     except Exception as exc:
+        _release_quota()
         return jsonify({"error": f"Stripe greška: {exc}"}), 502
 
     ticket = {
@@ -118,17 +137,22 @@ def confirm_ticket():
 @role_required("user")
 def my_tickets():
     tickets = list(
-        tickets_col.find({"user_id": current_user_id()}).sort("purchased_at", -1)
+        tickets_col.find({"user_id": current_user_id()})
+        .sort("purchased_at", -1).limit(200)
     )
+    event_ids = list({t["event_id"] for t in tickets})
+    events = {
+        e["_id"]: serialize(e) for e in events_col.find(
+            {"_id": {"$in": event_ids}},
+            {"name": 1, "date": 1, "cover_image": 1, "club_id": 1},
+        )
+    }
     enriched = []
     for t in tickets:
         doc = serialize(t)
-        event = events_col.find_one(
-            {"_id": t["event_id"]},
-            {"name": 1, "date": 1, "cover_image": 1, "club_id": 1},
-        )
+        event = events.get(t["event_id"])
         if event:
-            doc["event"] = serialize(event)
+            doc["event"] = event
         enriched.append(doc)
     return jsonify({"tickets": enriched})
 
@@ -141,30 +165,45 @@ def cancel_ticket(ticket_id):
     })
     if not ticket:
         return jsonify({"error": "Karta ne postoji"}), 404
-    if ticket["status"] not in ("valid", "pending"):
-        return jsonify({"error": f"Kartu nije moguće otkazati (status: {ticket['status']})"}), 409
 
     event = events_col.find_one({"_id": ticket["event_id"]}, {"date": 1})
     if event and event["date"] <= datetime.utcnow():
         return jsonify({"error": "Event je već počeo — otkazivanje nije moguće"}), 409
 
-    refunded = False
-    if ticket["status"] == "valid" and ticket.get("stripe_payment_intent_id"):
-        try:
-            stripe_service.refund_payment_intent(ticket["stripe_payment_intent_id"])
-            refunded = True
-        except Exception as exc:
-            return jsonify({"error": f"Refund nije uspio: {exc}"}), 502
-        events_col.update_one(
-            {"_id": ticket["event_id"]},
-            {"$inc": {"ticket_types.$[t].sold_quantity": -1}},
-            array_filters=[{"t.id": ticket["ticket_type_id"]}],
-        )
-
-    tickets_col.update_one(
-        {"_id": ticket["_id"]},
+    # Atomarno preuzmi otkazivanje — paralelni zahtjevi ne mogu dvaput refundirati
+    claimed = tickets_col.find_one_and_update(
+        {"_id": ticket["_id"], "status": {"$in": ["valid", "pending"]}},
         {"$set": {"status": "cancelled", "cancelled_at": datetime.utcnow()}},
     )
+    if not claimed:
+        return jsonify(
+            {"error": f"Kartu nije moguće otkazati (status: {ticket['status']})"}
+        ), 409
+
+    # Kvota je rezervirana pri kupnji (i za pending) — uvijek je oslobodi
+    events_col.update_one(
+        {"_id": ticket["event_id"]},
+        {"$inc": {"ticket_types.$[t].sold_quantity": -1}},
+        array_filters=[{"t.id": ticket["ticket_type_id"]}],
+    )
+
+    refunded = False
+    if claimed["status"] == "valid" and claimed.get("stripe_payment_intent_id"):
+        try:
+            stripe_service.refund_payment_intent(claimed["stripe_payment_intent_id"])
+            refunded = True
+            tickets_col.update_one(
+                {"_id": ticket["_id"]}, {"$set": {"refund_status": "refunded"}}
+            )
+        except Exception as exc:
+            tickets_col.update_one(
+                {"_id": ticket["_id"]},
+                {"$set": {"refund_status": "failed", "refund_error": str(exc)}},
+            )
+            return jsonify(
+                {"error": f"Karta je otkazana, ali refund nije uspio: {exc}"}
+            ), 502
+
     return jsonify({"success": True, "refunded": refunded})
 
 
@@ -185,10 +224,11 @@ def event_tickets(event_id):
     if err:
         return err
 
+    limit = min(int(request.args.get("limit", 200)), 1000)
     tickets = list(tickets_col.find({
         "event_id": event["_id"],
         "status": {"$in": ["valid", "checked_in"]},
-    }).sort("purchased_at", -1))
+    }).sort("purchased_at", -1).limit(limit))
 
     user_ids = list({t["user_id"] for t in tickets})
     users = {

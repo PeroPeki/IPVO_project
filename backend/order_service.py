@@ -11,6 +11,7 @@ from datetime import datetime
 
 from bson import ObjectId
 
+import stripe_service
 from db import drink_orders_col, menus_col, table_reservations_col, waiters_col
 from realtime import publish
 from reservation_service import apply_coupon
@@ -155,20 +156,56 @@ def waiter_deliver_order(order_id, waiter_id):
     )
 
 
+def waiter_collect_cash(order_id, waiter_id):
+    """Konobar potvrđuje naplatu gotovine — narudžba postaje plaćena."""
+    return _transition(
+        order_id,
+        {"payment_status": "paid", "paid_at": datetime.utcnow(),
+         "cash_collected_by": ObjectId(waiter_id)},
+        {"payment_method": "cash", "payment_status": "cash_pending"},
+    )
+
+
 def cancel_order(order_id, user_id=None):
-    query = {"order_status": {"$in": ["placed", "accepted", "preparing"]}}
+    query = {
+        "_id": ObjectId(order_id),
+        "order_status": {"$in": ["placed", "accepted", "preparing"]},
+    }
     if user_id is not None:
         query["user_id"] = ObjectId(user_id)
-    order = _transition(
-        order_id,
-        {"order_status": "cancelled", "payment_status": "cancelled",
-         "cancelled_at": datetime.utcnow()},
+
+    # Atomarno preuzmi otkazivanje; vraća dokument PRIJE izmjene da se vidi
+    # je li narudžba bila plaćena
+    order = drink_orders_col.find_one_and_update(
         query,
+        {"$set": {"order_status": "cancelled", "cancelled_at": datetime.utcnow()}},
     )
+    if not order:
+        raise OrderError("Narudžba ne postoji ili prijelaz nije dozvoljen")
+
     # Vrati kupon ako je bio primijenjen
     if order.get("coupon_applied"):
         table_reservations_col.update_one(
             {"_id": order["table_reservation_id"]},
             {"$inc": {"deposit_coupon_remaining": order["coupon_applied"]}},
         )
+
+    # Kartično plaćena narudžba → Stripe refund
+    payment_status = "cancelled"
+    if order.get("payment_status") == "paid" and order.get("stripe_payment_intent_id"):
+        try:
+            stripe_service.refund_payment_intent(order["stripe_payment_intent_id"])
+            payment_status = "refunded"
+        except Exception as exc:
+            payment_status = "refund_failed"
+            drink_orders_col.update_one(
+                {"_id": order["_id"]}, {"$set": {"refund_error": str(exc)}}
+            )
+
+    drink_orders_col.update_one(
+        {"_id": order["_id"]}, {"$set": {"payment_status": payment_status}}
+    )
+    order["order_status"] = "cancelled"
+    order["payment_status"] = payment_status
+    _publish_order_update(order, str(order["_id"]))
     return order

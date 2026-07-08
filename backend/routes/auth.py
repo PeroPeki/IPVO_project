@@ -1,4 +1,4 @@
-"""Autentikacija — registracija, prijava (user/admin/staff), OAuth, refresh."""
+"""Autentikacija — registracija, prijava (user/admin/staff), OAuth, refresh, logout."""
 
 from datetime import datetime
 
@@ -8,6 +8,7 @@ from flask_jwt_extended import get_jwt, get_jwt_identity, jwt_required
 
 from auth_utils import hash_password, issue_tokens, serialize, verify_password
 from db import club_admins_col, hostesses_col, superadmins_col, users_col, waiters_col
+from extensions import limiter, redis_client
 
 auth_bp = Blueprint("auth", __name__, url_prefix="/api/auth")
 
@@ -15,10 +16,24 @@ auth_bp = Blueprint("auth", __name__, url_prefix="/api/auth")
 def _public_user(user):
     doc = serialize(user)
     doc.pop("password_hash", None)
+    doc.pop("pin", None)
+    doc.pop("pin_hash", None)
     return doc
 
 
+def _revoke_current_token():
+    """Dodaje jti predanog tokena na blocklist do njegova isteka."""
+    payload = get_jwt()
+    ttl = payload["exp"] - int(datetime.utcnow().timestamp())
+    if ttl > 0:
+        try:
+            redis_client.setex(f"revoked_jwt:{payload['jti']}", ttl, "1")
+        except Exception as exc:
+            print(f"[auth] Revokacija tokena nije uspjela: {exc}")
+
+
 @auth_bp.route("/register", methods=["POST"])
+@limiter.limit("30 per hour")
 def register():
     data = request.get_json(silent=True) or {}
     email = (data.get("email") or "").strip().lower()
@@ -54,6 +69,7 @@ def register():
 
 
 @auth_bp.route("/login", methods=["POST"])
+@limiter.limit("10 per minute")
 def login():
     data = request.get_json(silent=True) or {}
     email = (data.get("email") or "").strip().lower()
@@ -94,6 +110,7 @@ def _oauth_upsert(email, name, provider, provider_id, picture=None):
 
 
 @auth_bp.route("/google", methods=["POST"])
+@limiter.limit("10 per minute")
 def google_auth():
     """Prima {id_token} iz Expo Google auth sessiona i verificira ga kod Googlea."""
     data = request.get_json(silent=True) or {}
@@ -118,6 +135,7 @@ def google_auth():
 
 
 @auth_bp.route("/facebook", methods=["POST"])
+@limiter.limit("10 per minute")
 def facebook_auth():
     """Prima {access_token} i verificira ga na Facebook Graph API-ju."""
     data = request.get_json(silent=True) or {}
@@ -147,10 +165,21 @@ def refresh():
     tokens = issue_tokens(
         get_jwt_identity(), claims.get("role", "user"), claims.get("club_id")
     )
+    # Rotacija: iskorišteni refresh token više ne vrijedi
+    _revoke_current_token()
     return jsonify(tokens)
 
 
+@auth_bp.route("/logout", methods=["POST"])
+@jwt_required(verify_type=False)
+def logout():
+    """Revocira predani token (access ili refresh). Klijent šalje oba redom."""
+    _revoke_current_token()
+    return jsonify({"success": True})
+
+
 @auth_bp.route("/admin/login", methods=["POST"])
+@limiter.limit("10 per minute")
 def admin_login():
     """Prijava club admina (email) ili superadmina (username)."""
     data = request.get_json(silent=True) or {}
@@ -171,6 +200,7 @@ def admin_login():
 
 
 @auth_bp.route("/staff/login", methods=["POST"])
+@limiter.limit("5 per minute; 30 per hour")
 def staff_login():
     """Prijava hostese/konobara — email + 4-znamenkasti PIN (brzo na tabletu)."""
     data = request.get_json(silent=True) or {}
@@ -179,7 +209,22 @@ def staff_login():
 
     for col, role in ((hostesses_col, "hostess"), (waiters_col, "waiter")):
         staff = col.find_one({"email": email, "is_active": True})
-        if staff and str(staff.get("pin")) == pin:
+        if not staff:
+            continue
+
+        ok = False
+        if staff.get("pin_hash"):
+            ok = verify_password(staff["pin_hash"], pin)
+        elif staff.get("pin") is not None:
+            # Naslijeđeni zapisi s PIN-om u čistom tekstu — hashiraj pri prvoj prijavi
+            ok = str(staff["pin"]) == pin
+            if ok:
+                col.update_one(
+                    {"_id": staff["_id"]},
+                    {"$set": {"pin_hash": hash_password(pin)}, "$unset": {"pin": ""}},
+                )
+
+        if ok:
             tokens = issue_tokens(staff["_id"], role, staff["club_id"])
             return jsonify({**tokens, "staff": _public_user(staff), "role": role})
 

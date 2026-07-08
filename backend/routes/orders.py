@@ -13,6 +13,7 @@ from order_service import (
     cancel_order,
     place_order,
     waiter_accept_order,
+    waiter_collect_cash,
     waiter_deliver_order,
 )
 
@@ -75,17 +76,25 @@ def create_order():
 @orders_bp.route("/waiter", methods=["GET"])
 @role_required("waiter")
 def waiter_orders():
-    """Aktivne narudžbe konobarove sekcije (placed + accepted + preparing)."""
+    """
+    Aktivne narudžbe konobarove sekcije (placed + accepted + preparing),
+    plus dostavljene gotovinske koje još čekaju naplatu.
+    """
     waiter = waiters_col.find_one({"_id": current_user_id()})
     if not waiter:
         return jsonify({"error": "Konobar ne postoji"}), 404
 
     query = {
         "club_id": waiter["club_id"],
-        "order_status": {"$in": ["placed", "accepted", "preparing"]},
-        "$or": [
-            {"waiter_id": waiter["_id"]},
-            {"section_id": {"$in": waiter.get("assigned_sections", [])}},
+        "$and": [
+            {"$or": [
+                {"waiter_id": waiter["_id"]},
+                {"section_id": {"$in": waiter.get("assigned_sections", [])}},
+            ]},
+            {"$or": [
+                {"order_status": {"$in": ["placed", "accepted", "preparing"]}},
+                {"order_status": "delivered", "payment_status": "cash_pending"},
+            ]},
         ],
     }
     orders = [serialize(o) for o in drink_orders_col.find(query).sort("created_at", 1)]
@@ -107,6 +116,17 @@ def accept_order(order_id):
 def deliver_order(order_id):
     try:
         order = waiter_deliver_order(order_id, current_user_id())
+    except OrderError as exc:
+        return jsonify({"error": str(exc)}), 409
+    return jsonify({"success": True, "order": serialize(order)})
+
+
+@orders_bp.route("/<order_id>/collect-cash", methods=["PUT"])
+@role_required("waiter", "admin", "superadmin")
+def collect_cash(order_id):
+    """Potvrda naplate gotovine — bez ovoga gotovinski prihod ne ulazi u izvještaje."""
+    try:
+        order = waiter_collect_cash(order_id, current_user_id())
     except OrderError as exc:
         return jsonify({"error": str(exc)}), 409
     return jsonify({"success": True, "order": serialize(order)})
@@ -187,11 +207,17 @@ def my_orders():
         drink_orders_col.find({"user_id": current_user_id()})
         .sort("created_at", -1).limit(50)
     )
+    event_ids = list({o["event_id"] for o in orders})
+    events = {
+        e["_id"]: serialize(e) for e in events_col.find(
+            {"_id": {"$in": event_ids}}, {"name": 1, "date": 1}
+        )
+    }
     enriched = []
     for o in orders:
         doc = serialize(o)
-        event = events_col.find_one({"_id": o["event_id"]}, {"name": 1, "date": 1})
+        event = events.get(o["event_id"])
         if event:
-            doc["event"] = serialize(event)
+            doc["event"] = event
         enriched.append(doc)
     return jsonify({"orders": enriched})

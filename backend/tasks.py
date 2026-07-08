@@ -1,61 +1,82 @@
 """
-Celery zadatci — NightClub Manager v2 (bez ML-a).
+Celery zadatci — NightClub Manager v2.
 
-- generate_daily_report: dnevni agregat po klubu (karte, rezervacije, pića, prihod)
+- generate_daily_report: dnevni agregat po klubu (Mongo aggregation pipeline)
 - send_reservation_reminders: podsjetnici dan prije eventa
+- expire_stale_payments: oslobađa neplaćene pending rezervacije i karte
+
+Konekcija na Mongo ide kroz db.py (MONGO_URI iz okoline), a real-time
+obavijesti kroz realtime.publish (Redis message queue) — worker tako može
+emitirati Socket.IO evente iako ne poslužuje klijente.
 """
 
 from datetime import datetime, timedelta
 
-import pymongo
 from celery import Celery
+
+from db import (
+    clubs_col,
+    drink_orders_col,
+    events_col,
+    reports_col,
+    table_reservations_col,
+    tickets_col,
+    users_col,
+)
+from realtime import publish
+from reservation_service import PENDING_DEPOSIT_TTL_MINUTES
 
 app = Celery('tasks')
 app.config_from_object('celery_config')
 
-MONGO_URI = "mongodb://mongo:27017"
+
+def _sum_and_count(col, match, field):
+    res = list(col.aggregate([
+        {"$match": match},
+        {"$group": {"_id": None, "total": {"$sum": f"${field}"}, "count": {"$sum": 1}}},
+    ]))
+    if not res:
+        return 0.0, 0
+    return round(res[0]["total"] or 0, 2), res[0]["count"]
 
 
 @app.task
 def generate_daily_report():
     """Dnevni izvještaj po klubu — karte, rezervacije, narudžbe i prihodi."""
-    client = pymongo.MongoClient(MONGO_URI)
-    db = client["mydb"]
     yesterday = datetime.utcnow() - timedelta(days=1)
 
-    for club in db.clubs.find({"is_active": True}):
+    for club in clubs_col.find({"is_active": True}):
         cid = club["_id"]
-        tickets = list(db.tickets.find({
+
+        revenue_tickets, tickets_sold = _sum_and_count(tickets_col, {
             "club_id": cid,
             "purchased_at": {"$gte": yesterday},
-            "status": {"$ne": "cancelled"}
-        }))
-        orders = list(db.drink_orders.find({
+            "status": {"$in": ["valid", "checked_in"]},
+        }, "price_paid")
+
+        revenue_drinks, drink_orders = _sum_and_count(drink_orders_col, {
             "club_id": cid,
             "created_at": {"$gte": yesterday},
-            "payment_status": "paid"
-        }))
-        deposits = list(db.table_reservations.find({
+            "payment_status": "paid",
+        }, "total")
+
+        revenue_deposits, _ = _sum_and_count(table_reservations_col, {
             "club_id": cid,
             "created_at": {"$gte": yesterday},
-            "deposit_paid": True
-        }))
+            "deposit_paid": True,
+        }, "deposit_amount")
 
-        revenue_tickets = round(sum(t.get("price_paid", 0) for t in tickets), 2)
-        revenue_drinks = round(sum(o.get("total", 0) for o in orders), 2)
-        revenue_deposits = round(sum(r.get("deposit_amount", 0) for r in deposits), 2)
-
-        db.reports.insert_one({
+        reports_col.insert_one({
             "club_id": cid,
             "date": datetime.utcnow(),
             "type": "DAILY_STATS",
             "metrics": {
-                "total_tickets_sold": len(tickets),
-                "total_reservations": db.table_reservations.count_documents({
+                "total_tickets_sold": tickets_sold,
+                "total_reservations": table_reservations_col.count_documents({
                     "club_id": cid,
-                    "created_at": {"$gte": yesterday}
+                    "created_at": {"$gte": yesterday},
                 }),
-                "total_drink_orders": len(orders),
+                "total_drink_orders": drink_orders,
                 "revenue_tickets": revenue_tickets,
                 "revenue_drinks": revenue_drinks,
                 "revenue_deposits": revenue_deposits,
@@ -65,7 +86,6 @@ def generate_daily_report():
             }
         })
         print(f"[report] Dnevni izvještaj spremljen za klub {club.get('name')}")
-    client.close()
 
 
 @app.task
@@ -73,28 +93,81 @@ def send_reservation_reminders():
     """Pošalji podsjetnike za rezervacije čiji event počinje za ~24h."""
     from email_service import send_reservation_reminder
 
-    client = pymongo.MongoClient(MONGO_URI)
-    db = client["mydb"]
     now = datetime.utcnow()
     window_start = now + timedelta(hours=23)
     window_end = now + timedelta(hours=25)
 
-    reservations = db.table_reservations.find({
+    reservations = table_reservations_col.find({
         "status": "confirmed",
         "reminder_sent": False
     })
     sent = 0
     for r in reservations:
-        event = db.events.find_one({"_id": r["event_id"]})
+        event = events_col.find_one({"_id": r["event_id"]})
         if event and window_start <= event["date"] <= window_end:
-            user = db.users.find_one({"_id": r["user_id"]})
+            user = users_col.find_one({"_id": r["user_id"]})
             if user:
                 send_reservation_reminder(r, event, user)
-            db.table_reservations.update_one(
+            table_reservations_col.update_one(
                 {"_id": r["_id"]},
                 {"$set": {"reminder_sent": True}}
             )
             sent += 1
     if sent:
         print(f"[reminders] Poslano {sent} podsjetnika.")
-    client.close()
+
+
+@app.task
+def expire_stale_payments():
+    """
+    Oslobađa resurse koje drže neplaćeni Stripe flowovi:
+    - pending VIP rezervacije bez depozita → stol se vraća u prodaju
+    - pending karte → kvota (sold_quantity) se vraća
+
+    Zakašnjeli webhook nakon isteka rješava se u payments.py /
+    reservation_service.py (revive ili automatski refund).
+    """
+    cutoff = datetime.utcnow() - timedelta(minutes=PENDING_DEPOSIT_TTL_MINUTES)
+    freed_tables = 0
+    freed_tickets = 0
+
+    for r in table_reservations_col.find({
+        "status": "pending",
+        "deposit_paid": False,
+        "created_at": {"$lt": cutoff},
+    }):
+        result = table_reservations_col.update_one(
+            {"_id": r["_id"], "status": "pending"},
+            {"$set": {
+                "status": "cancelled",
+                "active_hold": False,
+                "cancelled_at": datetime.utcnow(),
+                "cancel_reason": "deposit_timeout",
+            }},
+        )
+        if result.modified_count:
+            freed_tables += 1
+            publish('table_updates', {
+                "event_id": str(r["event_id"]),
+                "table_id": r["table_id"],
+                "status": "free",
+            })
+
+    for t in tickets_col.find({
+        "status": "pending",
+        "purchased_at": {"$lt": cutoff},
+    }):
+        result = tickets_col.update_one(
+            {"_id": t["_id"], "status": "pending"},
+            {"$set": {"status": "expired"}},
+        )
+        if result.modified_count:
+            freed_tickets += 1
+            events_col.update_one(
+                {"_id": t["event_id"]},
+                {"$inc": {"ticket_types.$[tt].sold_quantity": -1}},
+                array_filters=[{"tt.id": t["ticket_type_id"]}],
+            )
+
+    if freed_tables or freed_tickets:
+        print(f"[expiry] Oslobođeno {freed_tables} stolova i {freed_tickets} karata.")

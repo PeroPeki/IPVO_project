@@ -1,7 +1,9 @@
 import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { Pressable, ScrollView, Text, View } from 'react-native';
+import { ScrollView, Text, View } from 'react-native';
 import MenuCategory from '../../components/MenuCategory';
+import PressableScale from '../../components/ui/PressableScale';
+import { glow } from '../../constants/theme';
 import { useCart } from '../../hooks/useCart';
 import { api, errorMessage } from '../../services/api';
 
@@ -25,9 +27,9 @@ export default function OrderMenu() {
   const itemCount = cart.items.reduce((s, i) => s + i.quantity, 0);
 
   return (
-    <View className="flex-1 bg-bgDark">
-      <ScrollView className="px-4 pt-4">
-        {error ? <Text className="text-error mt-4">{error}</Text> : null}
+    <View className="flex-1 bg-ink">
+      <ScrollView className="px-5 pt-5" showsVerticalScrollIndicator={false}>
+        {error ? <Text className="text-error font-body mt-4">{error}</Text> : null}
         {menu?.categories?.map((cat: any) => (
           <MenuCategory key={cat.id} category={cat} />
         ))}
@@ -35,15 +37,16 @@ export default function OrderMenu() {
       </ScrollView>
 
       {itemCount > 0 && (
-        <View className="absolute bottom-0 left-0 right-0 p-4 bg-bgCard border-t border-accent3">
-          <Pressable
-            className="bg-accent1 rounded-xl py-4 items-center"
+        <View className="absolute bottom-0 left-0 right-0 p-4 bg-inkSoft border-t border-line">
+          <PressableScale
+            className="bg-neon rounded-2xl py-4 items-center"
+            style={glow}
             onPress={() => router.push('/order/cart')}
           >
-            <Text className="text-white font-bold text-base">
-              Košarica ({itemCount}) · {cart.total().toFixed(2)} €
+            <Text className="text-white font-bodyBd text-base">
+              Košarica ({itemCount})  ·  {cart.total().toFixed(2)} €
             </Text>
-          </Pressable>
+          </PressableScale>
         </View>
       )}
     </View>

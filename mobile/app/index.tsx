@@ -14,8 +14,8 @@ export default function Index() {
 
   if (!target) {
     return (
-      <View className="flex-1 bg-bgDark items-center justify-center">
-        <ActivityIndicator color={Colors.accent1} size="large" />
+      <View className="flex-1 bg-ink items-center justify-center">
+        <ActivityIndicator color={Colors.neon} size="large" />
       </View>
     );
   }

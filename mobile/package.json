@@ -8,13 +8,17 @@
     "ios": "expo start --ios"
   },
   "dependencies": {
+    "@expo-google-fonts/inter": "^0.2.3",
+    "@expo-google-fonts/syne": "^0.2.3",
     "@stripe/stripe-react-native": "0.37.2",
     "axios": "^1.7.2",
     "expo": "~51.0.0",
     "expo-auth-session": "~5.5.2",
     "expo-camera": "~15.0.14",
     "expo-constants": "~16.0.2",
+    "expo-font": "~12.0.10",
     "expo-image-picker": "~15.0.7",
+    "expo-linear-gradient": "~13.0.2",
     "expo-linking": "~6.3.1",
     "expo-router": "~3.5.21",
     "expo-secure-store": "~13.0.2",
