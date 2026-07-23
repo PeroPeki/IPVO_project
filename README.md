@@ -180,7 +180,7 @@ docker compose exec backend python seed_superadmin.py
 ```bash
 cd mobile
 npm install
-# U .env ili shellu postavi IP računala (Expo Go ne vidi "localhost"):
+# U .env ili shellu postavi IP računala (bas Go ne vidi "localhost"):
 EXPO_PUBLIC_API_URL=http://192.168.x.x \
 EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_test_... \
 npx expo start

@@ -19,7 +19,13 @@
     },
     "plugins": [
       "expo-router",
-      "@stripe/stripe-react-native",
+      [
+        "@stripe/stripe-react-native",
+        {
+          "merchantIdentifier": "merchant.hr.nightclubmanager",
+          "enableGooglePay": true
+        }
+      ],
       "expo-secure-store"
     ],
     "experiments": {
